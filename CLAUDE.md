@@ -139,7 +139,7 @@ FastDFS file IDs have format: `group_name/M00/xx/xx/xxxxxxxxxx.extension`
 ## Naming Conventions
 
 **IMPORTANT: Use correct casing for FastDFS**
-- Correct: `FastDFS`, `FastDFSClient`, `FastDFSOptions`, `IFastDFSClient`
+- Correct: `FastDFS`, `FastDFSClient`, `FastDFSConfiguration`, `IFastDFSClient`
 - Incorrect: `FastDfs`, `Fastdfs`, `FastDfs`
 
 The acronym "DFS" should always be fully capitalized as it stands for "Distributed File System".

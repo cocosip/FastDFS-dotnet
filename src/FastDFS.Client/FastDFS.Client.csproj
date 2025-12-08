@@ -10,6 +10,10 @@
     <PackageTags>fastdfs;dfs;storage;client;distributed</PackageTags>
   </PropertyGroup>
 
-  <!-- No external dependencies for core library -->
+  <!-- Core dependencies -->
+  <ItemGroup>
+    <PackageReference Include="System.Buffers" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
 
 </Project>

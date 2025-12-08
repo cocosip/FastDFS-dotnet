@@ -113,7 +113,7 @@ namespace FastDFS.Client.Utilities
         /// <param name="length">The fixed length to read.</param>
         /// <param name="encoding">The encoding to use. Defaults to UTF-8.</param>
         /// <returns>The string, with trailing null bytes removed.</returns>
-        public static string ReadFixedString(byte[] buffer, int offset, int length, Encoding? encoding = null)
+        public static string ReadFixedString(this byte[] buffer, int offset, int length, Encoding? encoding = null)
         {
             if (buffer == null)
                 throw new ArgumentNullException(nameof(buffer));

@@ -48,7 +48,7 @@ FastDFS.Client/
 │   ├── FastDFSConnection.cs       # TCP 连接封装
 │   ├── IConnectionPool.cs         # 连接池接口
 │   ├── ConnectionPool.cs          # 连接池实现
-│   └── ConnectionPoolOptions.cs   # 连接池配置
+│   └── ConnectionPoolConfiguration.cs   # 连接池配置
 ├── Tracker/               # Tracker 客户端
 │   ├── ITrackerClient.cs
 │   ├── TrackerClient.cs
@@ -59,8 +59,8 @@ FastDFS.Client/
 │   ├── FastDFSFileInfo.cs         # 文件信息
 │   └── FastDFSMetadata.cs         # 元数据
 ├── Configuration/         # 配置
-│   ├── FastDFSOptions.cs          # 核心配置类
-│   └── ConnectionPoolOptions.cs   # 连接池配置
+│   ├── FastDFSConfiguration.cs          # 核心配置类
+│   └── ConnectionPoolConfiguration.cs   # 连接池配置
 ├── Exceptions/            # 异常
 │   ├── FastDFSException.cs
 │   ├── FastDFSNetworkException.cs
@@ -76,10 +76,10 @@ FastDFS.Client/
 
 **使用示例（无 DI）**:
 ```csharp
-var options = new FastDFSOptions
+var options = new FastDFSConfiguration
 {
     TrackerServers = new[] { "192.168.1.100:22122" },
-    ConnectionPool = new ConnectionPoolOptions
+    ConnectionPool = new ConnectionPoolConfiguration
     {
         MaxConnectionPerServer = 50
     }

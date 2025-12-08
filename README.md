@@ -29,7 +29,7 @@ dotnet add package FastDFS.Client
 services.AddFastDFS(options =>
 {
     options.TrackerServers = new[] { "192.168.1.100:22122" };
-    options.ConnectionPool = new ConnectionPoolOptions
+    options.ConnectionPool = new ConnectionPoolConfiguration
     {
         MaxConnectionPerServer = 50,
         MinConnectionPerServer = 5
@@ -117,7 +117,7 @@ services.AddFastDFS(configuration.GetSection("FastDFS"));
 ### Non-DI Usage
 
 ```csharp
-var options = new FastDFSOptions
+var options = new FastDFSConfiguration
 {
     TrackerServers = new[] { "192.168.1.100:22122" }
 };
