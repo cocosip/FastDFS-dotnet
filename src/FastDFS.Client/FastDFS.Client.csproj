@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 导入公共属性 -->
+  <Import Project="..\common.props" />
+
+  <!-- 项目特定属性 -->
+  <PropertyGroup>
+    <PackageId>FastDFS.Client</PackageId>
+    <Description>A lightweight, high-performance FastDFS .NET client with connection pooling support. Core library without dependencies.</Description>
+    <PackageTags>fastdfs;dfs;storage;client;distributed</PackageTags>
+  </PropertyGroup>
+
+  <!-- No external dependencies for core library -->
+
+</Project>

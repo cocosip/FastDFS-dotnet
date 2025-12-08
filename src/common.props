@@ -1,0 +1,21 @@
+<Project>
+  <!--
+    公共项目属性文件
+    用于 FastDFS.Client 和 FastDFS.Client.DependencyInjection 项目
+    包版本由根目录的 Directory.Packages.props 统一管理
+  -->
+
+  <PropertyGroup Label="Common Properties">
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package Metadata">
+    <Authors>FastDFS Team</Authors>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 导入公共属性 -->
+  <Import Project="..\common.props" />
+
+  <!-- 项目特定属性 -->
+  <PropertyGroup>
+    <PackageId>FastDFS.Client.DependencyInjection</PackageId>
+    <Description>Dependency injection extensions for FastDFS.Client with IOptions pattern and multi-cluster support</Description>
+    <PackageTags>fastdfs;dfs;storage;client;di;dependencyinjection</PackageTags>
+  </PropertyGroup>
+
+  <!-- 项目引用 -->
+  <ItemGroup>
+    <ProjectReference Include="..\FastDFS.Client\FastDFS.Client.csproj" />
+  </ItemGroup>
+
+  <!-- 扩展包依赖 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+</Project>
