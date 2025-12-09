@@ -15,32 +15,32 @@ namespace FastDFS.Client
         /// <summary>
         /// Creates a FastDFS client with the specified options.
         /// </summary>
-        /// <param name="options">The FastDFS options.</param>
+        /// <param name="configuration">The FastDFS options.</param>
         /// <param name="name">Optional: The client name. Default is "default".</param>
         /// <returns>A new IFastDFSClient instance.</returns>
         /// <exception cref="ArgumentNullException">Thrown when options is null.</exception>
         /// <exception cref="ArgumentException">Thrown when options are invalid.</exception>
-        public static IFastDFSClient CreateClient(FastDFSConfiguration options, string name = "default")
+        public static IFastDFSClient CreateClient(FastDFSConfiguration configuration, string name = "default")
         {
-            if (options == null)
-                throw new ArgumentNullException(nameof(options));
+            if (configuration == null)
+                throw new ArgumentNullException(nameof(configuration));
 
             // Validate options
-            options.Validate();
+            configuration.Validate();
 
             // Create tracker client
-            var trackerEndpoints = options.TrackerServers.ToList();
-            var trackerClient = new TrackerClient(trackerEndpoints, options.ConnectionPool);
+            var trackerEndpoints = configuration.TrackerServers.ToList();
+            var trackerClient = new TrackerClient(trackerEndpoints, configuration.ConnectionPool);
 
             // Create and return FastDFS client
             // FastDFSClient will manage its own storage server connection pools internally
             return new FastDFSClient(
                 trackerClient,
-                options.ConnectionPool,
+                configuration.ConnectionPool,
                 name,
-                options.DefaultGroupName,
-                options.StorageSelectionStrategy,
-                options.HttpConfig);
+                configuration.DefaultGroupName,
+                configuration.StorageSelectionStrategy,
+                configuration.HttpConfig);
         }
 
         /// <summary>
@@ -140,11 +140,11 @@ namespace FastDFS.Client
         /// </summary>
         /// <param name="name">The client name.</param>
         /// <param name="trackerServers">The tracker server endpoints.</param>
-        /// <param name="configureConnectionPool">Optional: Configure connection pool options.</param>
+        /// <param name="poolConfigurer">Optional: Configure connection pool options.</param>
         public void AddClient(
             string name,
             IEnumerable<string> trackerServers,
-            Action<ConnectionPoolConfiguration>? configureConnectionPool = null)
+            Action<ConnectionPoolConfiguration>? poolConfigurer = null)
         {
             if (trackerServers == null)
                 throw new ArgumentNullException(nameof(trackerServers));
@@ -154,7 +154,7 @@ namespace FastDFS.Client
                 TrackerServers = trackerServers.ToList()
             };
 
-            configureConnectionPool?.Invoke(options.ConnectionPool);
+            poolConfigurer?.Invoke(options.ConnectionPool);
 
             AddClient(name, options);
         }

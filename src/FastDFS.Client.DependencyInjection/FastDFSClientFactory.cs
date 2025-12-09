@@ -128,12 +128,12 @@ namespace FastDFS.Client.DependencyInjection
         /// <summary>
         /// Creates a TrackerClient for the specified named configuration.
         /// </summary>
-        private ITrackerClient CreateTrackerClient(string name, FastDFSConfiguration options)
+        private ITrackerClient CreateTrackerClient(string name, FastDFSConfiguration configuration)
         {
-            var trackerEndpoints = options.TrackerServers.ToList();
+            var trackerEndpoints = configuration.TrackerServers.ToList();
             var trackerClient = new TrackerClient(
                 trackerEndpoints,
-                options.ConnectionPool,
+                configuration.ConnectionPool,
                 _loggerFactory);
             return trackerClient;
         }

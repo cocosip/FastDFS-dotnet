@@ -119,12 +119,13 @@ namespace FastDFS.Client.Connection
 
                 // Create socket based on address family
                 var address = addresses[0];
-                _socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-
-                // Configure socket options for better performance
-                _socket.NoDelay = true; // Disable Nagle's algorithm for low latency
-                _socket.SendBufferSize = 64 * 1024; // 64KB send buffer
-                _socket.ReceiveBufferSize = 64 * 1024; // 64KB receive buffer
+                _socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                {
+                    // Configure socket options for better performance
+                    NoDelay = true, // Disable Nagle's algorithm for low latency
+                    SendBufferSize = 64 * 1024, // 64KB send buffer
+                    ReceiveBufferSize = 64 * 1024 // 64KB receive buffer
+                };
 
                 // Set timeouts
                 if (_sendTimeout > 0)

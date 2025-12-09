@@ -316,7 +316,9 @@ namespace FastDFS.Client.Tracker
             // Try each tracker server in round-robin fashion
             while (attempts < maxAttempts)
             {
-                var currentIndex = (_currentTrackerIndex + attempts) % _trackerEndpoints.Count;
+                // Thread-safe read of current tracker index
+                var baseIndex = Interlocked.CompareExchange(ref _currentTrackerIndex, 0, 0);
+                var currentIndex = (baseIndex + attempts) % _trackerEndpoints.Count;
                 var endpoint = _trackerEndpoints[currentIndex];
                 var pool = _connectionPools[endpoint.Key];
 
@@ -327,8 +329,8 @@ namespace FastDFS.Client.Tracker
                 {
                     var result = await operation(pool).ConfigureAwait(false);
 
-                    // Success - update the current tracker index for next request
-                    _currentTrackerIndex = currentIndex;
+                    // Success - update the current tracker index for next request (thread-safe)
+                    Interlocked.Exchange(ref _currentTrackerIndex, currentIndex);
 
                     if (attempts > 0)
                     {
