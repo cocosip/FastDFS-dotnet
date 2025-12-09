@@ -30,6 +30,8 @@ bld/
 # Visual Studio Code
 .vscode/
 
+.claude/
+
 # Rider
 .idea/
 *.sln.iml
