@@ -13,7 +13,7 @@
   </PropertyGroup>
 
   <PropertyGroup Label="Package Metadata">
-    <Authors>FastDFS Team</Authors>
+    <Authors>virtual</Authors>
     <Company>FastDFS</Company>
     <Product>FastDFS .NET Client</Product>
     <Copyright>Copyright (c) 2024 FastDFS Team</Copyright>
