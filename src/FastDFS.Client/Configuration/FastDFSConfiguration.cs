@@ -48,6 +48,13 @@ namespace FastDFS.Client.Configuration
         public StorageSelectionStrategy StorageSelectionStrategy { get; set; } = StorageSelectionStrategy.TrackerSelection;
 
         /// <summary>
+        /// Gets or sets the HTTP access configuration for FastDFS Nginx module.
+        /// Configure this to enable HTTP URL generation for files.
+        /// Optional: Can be null if HTTP access is not needed.
+        /// </summary>
+        public HttpConfiguration? HttpConfig { get; set; }
+
+        /// <summary>
         /// Validates the configuration options.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when configuration is invalid.</exception>
@@ -83,6 +90,9 @@ namespace FastDFS.Client.Configuration
 
             // Validate connection pool options
             ConnectionPool?.Validate();
+
+            // Validate HTTP configuration if provided
+            HttpConfig?.Validate();
         }
 
         /// <summary>
@@ -106,7 +116,15 @@ namespace FastDFS.Client.Configuration
                 NetworkTimeout = NetworkTimeout,
                 Charset = Charset,
                 DefaultGroupName = DefaultGroupName,
-                StorageSelectionStrategy = StorageSelectionStrategy
+                StorageSelectionStrategy = StorageSelectionStrategy,
+                HttpConfig = HttpConfig != null ? new HttpConfiguration
+                {
+                    ServerUrls = new Dictionary<string, string>(HttpConfig.ServerUrls),
+                    DefaultServerUrlTemplate = HttpConfig.DefaultServerUrlTemplate,
+                    SecretKey = HttpConfig.SecretKey,
+                    AntiStealTokenEnabled = HttpConfig.AntiStealTokenEnabled,
+                    DefaultTokenExpireSeconds = HttpConfig.DefaultTokenExpireSeconds
+                } : null
             };
         }
     }

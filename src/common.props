@@ -14,8 +14,32 @@
 
   <PropertyGroup Label="Package Metadata">
     <Authors>FastDFS Team</Authors>
+    <Company>FastDFS</Company>
+    <Product>FastDFS .NET Client</Product>
+    <Copyright>Copyright (c) 2024 FastDFS Team</Copyright>
     <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/cocosip/FastDFS-dotnet</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/cocosip/FastDFS-dotnet</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <PackageReleaseNotes>Initial release with core functionality:
+- FastDFS protocol implementation
+- Connection pooling with lifecycle management
+- Tracker and Storage client
+- Multi-cluster support
+- Dependency injection integration
+- High-performance Socket-based networking
+    </PackageReleaseNotes>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Build Configuration">
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 </Project>

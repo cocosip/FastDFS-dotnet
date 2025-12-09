@@ -10,6 +10,11 @@
     <PackageTags>fastdfs;dfs;storage;client;di;dependencyinjection</PackageTags>
   </PropertyGroup>
 
+  <!-- Include README in package -->
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
   <!-- 项目引用 -->
   <ItemGroup>
     <ProjectReference Include="..\FastDFS.Client\FastDFS.Client.csproj" />

@@ -10,16 +10,21 @@ using FastDFS.Client.Protocol.Requests;
 using FastDFS.Client.Protocol.Responses;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FastDFS.Client.Storage
 {
     /// <summary>
     /// FastDFS Storage client for file operations.
+    /// NOTE: This class is not typically used directly. Use IFastDFSClient instead.
     /// </summary>
     public class StorageClient : IStorageClient, IDisposable
     {
         private readonly ITrackerClient _trackerClient;
         private readonly ConnectionPoolConfiguration _poolOptions;
+        private readonly ILoggerFactory? _loggerFactory;
+        private readonly ILogger _logger;
         private readonly ConcurrentDictionary<string, IConnectionPool> _storagePools;
         private bool _disposed;
 
@@ -28,11 +33,19 @@ namespace FastDFS.Client.Storage
         /// </summary>
         /// <param name="trackerClient">The tracker client.</param>
         /// <param name="poolOptions">Connection pool options.</param>
-        public StorageClient(ITrackerClient trackerClient, ConnectionPoolConfiguration poolOptions)
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        public StorageClient(
+            ITrackerClient trackerClient,
+            ConnectionPoolConfiguration poolOptions,
+            ILoggerFactory? loggerFactory = null)
         {
             _trackerClient = trackerClient ?? throw new ArgumentNullException(nameof(trackerClient));
             _poolOptions = poolOptions ?? throw new ArgumentNullException(nameof(poolOptions));
+            _loggerFactory = loggerFactory;
+            _logger = loggerFactory?.CreateLogger<StorageClient>() ?? NullLogger<StorageClient>.Instance;
             _storagePools = new ConcurrentDictionary<string, IConnectionPool>();
+
+            _logger.LogInformation("StorageClient initialized");
         }
 
         /// <summary>
@@ -309,7 +322,11 @@ namespace FastDFS.Client.Storage
         private IConnectionPool GetOrCreateStoragePool(string host, int port)
         {
             var key = $"{host}:{port}";
-            return _storagePools.GetOrAdd(key, _ => new ConnectionPool(host, port, _poolOptions));
+            return _storagePools.GetOrAdd(key, _ =>
+            {
+                var poolLogger = _loggerFactory?.CreateLogger<ConnectionPool>();
+                return new ConnectionPool(host, port, _poolOptions, poolLogger);
+            });
         }
 
         /// <summary>

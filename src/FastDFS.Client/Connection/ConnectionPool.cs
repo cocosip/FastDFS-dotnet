@@ -3,7 +3,8 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
-using FastDFS.Client.Exceptions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FastDFS.Client.Connection
 {
@@ -18,6 +19,7 @@ namespace FastDFS.Client.Connection
         private readonly ConcurrentQueue<FastDFSConnection> _idleConnections;
         private readonly SemaphoreSlim _connectionSemaphore;
         private readonly Timer _cleanupTimer;
+        private readonly ILogger _logger;
         private int _totalConnections;
         private int _activeConnections;
         private bool _disposed;
@@ -43,7 +45,8 @@ namespace FastDFS.Client.Connection
         /// <param name="host">The server host.</param>
         /// <param name="port">The server port.</param>
         /// <param name="options">The connection pool options.</param>
-        public ConnectionPool(string host, int port, ConnectionPoolConfiguration options)
+        /// <param name="logger">Optional logger instance.</param>
+        public ConnectionPool(string host, int port, ConnectionPoolConfiguration options, ILogger<ConnectionPool>? logger = null)
         {
             if (string.IsNullOrWhiteSpace(host))
                 throw new ArgumentException("Host cannot be null or empty.", nameof(host));
@@ -57,10 +60,14 @@ namespace FastDFS.Client.Connection
             _host = host;
             _port = port;
             _options = options;
+            _logger = logger ?? NullLogger<ConnectionPool>.Instance;
             _idleConnections = new ConcurrentQueue<FastDFSConnection>();
             _connectionSemaphore = new SemaphoreSlim(_options.MaxConnectionPerServer, _options.MaxConnectionPerServer);
             _totalConnections = 0;
             _activeConnections = 0;
+
+            _logger.LogInformation("ConnectionPool created for {Host}:{Port} with MaxConnections={MaxConnections}, MinConnections={MinConnections}",
+                _host, _port, _options.MaxConnectionPerServer, _options.MinConnectionPerServer);
 
             // Start cleanup timer (run every 30 seconds)
             _cleanupTimer = new Timer(
@@ -80,6 +87,9 @@ namespace FastDFS.Client.Connection
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ConnectionPool));
 
+            _logger.LogDebug("Requesting connection from pool {Host}:{Port} (Total={Total}, Idle={Idle}, Active={Active})",
+                _host, _port, _totalConnections, _idleConnections.Count, _activeConnections);
+
             // Try to get an idle connection first
             while (_idleConnections.TryDequeue(out var connection))
             {
@@ -87,11 +97,13 @@ namespace FastDFS.Client.Connection
                 if (IsConnectionValid(connection))
                 {
                     Interlocked.Increment(ref _activeConnections);
+                    _logger.LogDebug("Reused idle connection from pool {Host}:{Port}", _host, _port);
                     return connection;
                 }
                 else
                 {
                     // Connection is invalid, dispose it
+                    _logger.LogDebug("Disposing invalid connection from pool {Host}:{Port}", _host, _port);
                     DisposeConnection(connection);
                 }
             }
@@ -102,20 +114,26 @@ namespace FastDFS.Client.Connection
 
             if (!acquired)
             {
+                _logger.LogWarning("Timeout waiting for connection to {Host}:{Port}. Max connections ({MaxConnections}) reached.",
+                    _host, _port, _options.MaxConnectionPerServer);
                 throw new TimeoutException($"Timeout waiting for connection to {_host}:{_port}. Max connections reached.");
             }
 
             try
             {
                 // Create a new connection
+                _logger.LogDebug("Creating new connection to {Host}:{Port}", _host, _port);
                 var newConnection = await CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
                 Interlocked.Increment(ref _activeConnections);
+                _logger.LogInformation("Successfully created connection to {Host}:{Port} (Total={Total}, Active={Active})",
+                    _host, _port, _totalConnections, _activeConnections);
                 return newConnection;
             }
-            catch
+            catch (Exception ex)
             {
                 // Release the semaphore if connection creation failed
                 _connectionSemaphore.Release();
+                _logger.LogError(ex, "Failed to create connection to {Host}:{Port}", _host, _port);
                 throw;
             }
         }
@@ -129,6 +147,7 @@ namespace FastDFS.Client.Connection
             if (_disposed)
             {
                 // Pool is disposed, just dispose the connection
+                _logger.LogDebug("Pool disposed, disposing returned connection to {Host}:{Port}", _host, _port);
                 DisposeConnection(connection);
                 return;
             }
@@ -142,10 +161,13 @@ namespace FastDFS.Client.Connection
             if (IsConnectionValid(connection))
             {
                 _idleConnections.Enqueue(connection);
+                _logger.LogDebug("Returned connection to pool {Host}:{Port} (Idle={Idle}, Active={Active})",
+                    _host, _port, _idleConnections.Count, _activeConnections);
             }
             else
             {
                 // Connection is invalid, dispose it
+                _logger.LogDebug("Returned connection is invalid, disposing connection to {Host}:{Port}", _host, _port);
                 DisposeConnection(connection);
             }
         }
@@ -222,6 +244,9 @@ namespace FastDFS.Client.Connection
                 int minToKeep = _options.MinConnectionPerServer;
                 int removed = 0;
 
+                _logger.LogDebug("Starting connection cleanup for {Host}:{Port} (Idle={Idle}, Total={Total})",
+                    _host, _port, idleCount, _totalConnections);
+
                 // Create a temporary list to hold valid connections
                 var validConnections = new ConcurrentQueue<FastDFSConnection>();
 
@@ -259,11 +284,20 @@ namespace FastDFS.Client.Connection
                     _idleConnections.Enqueue(connection);
                 }
 
+                if (removed > 0)
+                {
+                    _logger.LogInformation("Cleanup removed {RemovedCount} expired connections from {Host}:{Port} (Remaining={Remaining})",
+                        removed, _host, _port, _totalConnections);
+                }
+
                 // If we have fewer than minimum connections, create more
                 int currentTotal = _totalConnections;
                 if (currentTotal < minToKeep)
                 {
                     int toCreate = minToKeep - currentTotal;
+                    _logger.LogInformation("Prewarming connection pool {Host}:{Port}, creating {Count} connections to reach minimum",
+                        _host, _port, toCreate);
+
                     _ = Task.Run(async () =>
                     {
                         for (int i = 0; i < toCreate; i++)
@@ -277,25 +311,29 @@ namespace FastDFS.Client.Connection
                                     {
                                         var connection = await CreateConnectionAsync(CancellationToken.None).ConfigureAwait(false);
                                         _idleConnections.Enqueue(connection);
+                                        _logger.LogDebug("Prewarmed connection {Index}/{Total} to {Host}:{Port}",
+                                            i + 1, toCreate, _host, _port);
                                     }
-                                    catch
+                                    catch (Exception ex)
                                     {
                                         _connectionSemaphore.Release();
-                                        // Ignore errors during prewarming
+                                        _logger.LogWarning(ex, "Failed to prewarm connection {Index}/{Total} to {Host}:{Port}",
+                                            i + 1, toCreate, _host, _port);
                                     }
                                 }
                             }
-                            catch
+                            catch (Exception ex)
                             {
-                                // Ignore errors during prewarming
+                                _logger.LogWarning(ex, "Failed to acquire semaphore for prewarming connection to {Host}:{Port}",
+                                    _host, _port);
                             }
                         }
                     });
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Suppress exceptions in cleanup timer
+                _logger.LogError(ex, "Error during connection cleanup for {Host}:{Port}", _host, _port);
             }
         }
 
@@ -330,21 +368,28 @@ namespace FastDFS.Client.Connection
 
             _disposed = true;
 
+            _logger.LogInformation("Disposing ConnectionPool for {Host}:{Port} (Total={Total}, Idle={Idle}, Active={Active})",
+                _host, _port, _totalConnections, _idleConnections.Count, _activeConnections);
+
             // Stop the cleanup timer
             _cleanupTimer?.Dispose();
 
             // Dispose all idle connections
+            int disposedCount = 0;
             while (_idleConnections.TryDequeue(out var connection))
             {
                 try
                 {
                     connection.Dispose();
+                    disposedCount++;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Suppress exceptions during disposal
+                    _logger.LogWarning(ex, "Error disposing connection to {Host}:{Port}", _host, _port);
                 }
             }
+
+            _logger.LogInformation("Disposed {Count} idle connections to {Host}:{Port}", disposedCount, _host, _port);
 
             // Dispose the semaphore
             _connectionSemaphore?.Dispose();

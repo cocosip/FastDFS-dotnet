@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -335,5 +336,56 @@ namespace FastDFS.Client
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>List of storage servers in the specified group with detailed status information.</returns>
         Task<List<Tracker.StorageServerDetail>> ListStorageServersAsync(string groupName, string? storageServerId = null, CancellationToken cancellationToken = default);
+
+        // ==================== HTTP URL Operations (for FastDFS Nginx Module) ====================
+
+        /// <summary>
+        /// Generates an HTTP access URL for a file.
+        /// This requires FastDFS Nginx module to be installed and configured on storage servers.
+        /// </summary>
+        /// <param name="fileId">The complete file ID in the format "group_name/path/filename".</param>
+        /// <param name="attachmentFilename">Optional: Custom filename for download (Content-Disposition header). If null, uses original filename.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>HTTP URL for accessing the file (e.g., "http://192.168.1.100/group1/M00/00/00/xxxxx.jpg").</returns>
+        /// <exception cref="InvalidOperationException">Thrown when HTTP configuration is not enabled.</exception>
+        Task<string> GetFileUrlAsync(string fileId, string? attachmentFilename = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Generates an HTTP access URL for a file.
+        /// This requires FastDFS Nginx module to be installed and configured on storage servers.
+        /// </summary>
+        /// <param name="groupName">The storage group name. Can be null if fileName contains the complete file ID with group name.</param>
+        /// <param name="fileName">The file name (path on storage server), or complete file ID in format "group_name/path/filename".</param>
+        /// <param name="attachmentFilename">Optional: Custom filename for download (Content-Disposition header). If null, uses original filename.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>HTTP URL for accessing the file.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when HTTP configuration is not enabled.</exception>
+        Task<string> GetFileUrlAsync(string? groupName, string fileName, string? attachmentFilename = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Generates an HTTP access URL with anti-steal token.
+        /// This requires FastDFS Nginx module with anti-steal feature enabled.
+        /// The URL will be valid until the specified expiration time.
+        /// </summary>
+        /// <param name="fileId">The complete file ID in the format "group_name/path/filename".</param>
+        /// <param name="expireSeconds">Token expiration time in seconds from now. If null, uses configuration default.</param>
+        /// <param name="attachmentFilename">Optional: Custom filename for download. If null, uses original filename.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>HTTP URL with token and timestamp parameters (e.g., "http://192.168.1.100/group1/M00/00/00/xxxxx.jpg?token=xxx&amp;ts=1234567890").</returns>
+        /// <exception cref="InvalidOperationException">Thrown when HTTP configuration or anti-steal token is not enabled.</exception>
+        Task<string> GetFileUrlWithTokenAsync(string fileId, int? expireSeconds = null, string? attachmentFilename = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Generates an HTTP access URL with anti-steal token.
+        /// This requires FastDFS Nginx module with anti-steal feature enabled.
+        /// </summary>
+        /// <param name="groupName">The storage group name. Can be null if fileName contains the complete file ID with group name.</param>
+        /// <param name="fileName">The file name (path on storage server), or complete file ID in format "group_name/path/filename".</param>
+        /// <param name="expireSeconds">Token expiration time in seconds from now. If null, uses configuration default.</param>
+        /// <param name="attachmentFilename">Optional: Custom filename for download. If null, uses original filename.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>HTTP URL with token and timestamp parameters.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when HTTP configuration or anti-steal token is not enabled.</exception>
+        Task<string> GetFileUrlWithTokenAsync(string? groupName, string fileName, int? expireSeconds = null, string? attachmentFilename = null, CancellationToken cancellationToken = default);
     }
 }

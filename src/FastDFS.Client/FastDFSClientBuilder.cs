@@ -39,7 +39,8 @@ namespace FastDFS.Client
                 options.ConnectionPool,
                 name,
                 options.DefaultGroupName,
-                options.StorageSelectionStrategy);
+                options.StorageSelectionStrategy,
+                options.HttpConfig);
         }
 
         /// <summary>

@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Linq;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Tracker;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace FastDFS.Client.DependencyInjection
@@ -15,6 +17,8 @@ namespace FastDFS.Client.DependencyInjection
     public class FastDFSClientFactory : IFastDFSClientFactory, IDisposable
     {
         private readonly IOptionsMonitor<FastDFSConfiguration> _optionsMonitor;
+        private readonly ILoggerFactory? _loggerFactory;
+        private readonly ILogger _logger;
         private readonly ConcurrentDictionary<string, IFastDFSClient> _clients;
         private readonly ConcurrentDictionary<string, ITrackerClient> _trackerClients;
         private readonly object _lock = new object();
@@ -26,11 +30,18 @@ namespace FastDFS.Client.DependencyInjection
         /// Initializes a new instance of the <see cref="FastDFSClientFactory"/> class.
         /// </summary>
         /// <param name="optionsMonitor">The options monitor for accessing named configurations.</param>
-        public FastDFSClientFactory(IOptionsMonitor<FastDFSConfiguration> optionsMonitor)
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        public FastDFSClientFactory(
+            IOptionsMonitor<FastDFSConfiguration> optionsMonitor,
+            ILoggerFactory? loggerFactory = null)
         {
             _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+            _loggerFactory = loggerFactory;
+            _logger = loggerFactory?.CreateLogger<FastDFSClientFactory>() ?? NullLogger<FastDFSClientFactory>.Instance;
             _clients = new ConcurrentDictionary<string, IFastDFSClient>();
             _trackerClients = new ConcurrentDictionary<string, ITrackerClient>();
+
+            _logger.LogInformation("FastDFSClientFactory initialized");
         }
 
         /// <inheritdoc/>
@@ -49,7 +60,10 @@ namespace FastDFS.Client.DependencyInjection
 
             // Try to get existing client
             if (_clients.TryGetValue(name, out var existingClient))
+            {
+                _logger.LogDebug("Returning existing FastDFS client '{ClientName}'", name);
                 return existingClient;
+            }
 
             // Create new client (thread-safe)
             lock (_lock)
@@ -58,10 +72,13 @@ namespace FastDFS.Client.DependencyInjection
                 if (_clients.TryGetValue(name, out existingClient))
                     return existingClient;
 
+                _logger.LogInformation("Creating new FastDFS client '{ClientName}'", name);
+
                 // Get configuration for this named client
                 var options = _optionsMonitor.Get(name);
                 if (options == null || options.TrackerServers == null || options.TrackerServers.Count == 0)
                 {
+                    _logger.LogError("No configuration found for FastDFS client '{ClientName}'", name);
                     throw new InvalidOperationException($"No configuration found for FastDFS client '{name}'. Please ensure AddFastDFS(\"{name}\", ...) was called.");
                 }
 
@@ -79,8 +96,13 @@ namespace FastDFS.Client.DependencyInjection
                     options.ConnectionPool,
                     name,
                     options.DefaultGroupName,
-                    options.StorageSelectionStrategy);
+                    options.StorageSelectionStrategy,
+                    options.HttpConfig,
+                    _loggerFactory);
                 _clients[name] = client;
+
+                _logger.LogInformation("Successfully created FastDFS client '{ClientName}' with {TrackerCount} tracker server(s)",
+                    name, options.TrackerServers.Count);
 
                 return client;
             }
@@ -109,7 +131,10 @@ namespace FastDFS.Client.DependencyInjection
         private ITrackerClient CreateTrackerClient(string name, FastDFSConfiguration options)
         {
             var trackerEndpoints = options.TrackerServers.ToList();
-            var trackerClient = new TrackerClient(trackerEndpoints, options.ConnectionPool);
+            var trackerClient = new TrackerClient(
+                trackerEndpoints,
+                options.ConnectionPool,
+                _loggerFactory);
             return trackerClient;
         }
 
@@ -130,36 +155,42 @@ namespace FastDFS.Client.DependencyInjection
 
             _disposed = true;
 
+            _logger.LogInformation("Disposing FastDFSClientFactory with {ClientCount} client(s)", _clients.Count);
+
             // Dispose all clients (FastDFSClient will dispose its own storage connection pools)
-            foreach (var client in _clients.Values)
+            foreach (var kvp in _clients)
             {
                 try
                 {
-                    if (client is IDisposable disposableClient)
+                    _logger.LogDebug("Disposing FastDFS client '{ClientName}'", kvp.Key);
+                    if (kvp.Value is IDisposable disposableClient)
                         disposableClient.Dispose();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Suppress exceptions during disposal
+                    _logger.LogWarning(ex, "Error disposing FastDFS client '{ClientName}'", kvp.Key);
                 }
             }
 
             // Dispose all tracker clients
-            foreach (var trackerClient in _trackerClients.Values)
+            foreach (var kvp in _trackerClients)
             {
                 try
                 {
-                    if (trackerClient is IDisposable disposableTracker)
+                    _logger.LogDebug("Disposing TrackerClient for '{ClientName}'", kvp.Key);
+                    if (kvp.Value is IDisposable disposableTracker)
                         disposableTracker.Dispose();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Suppress exceptions during disposal
+                    _logger.LogWarning(ex, "Error disposing TrackerClient for '{ClientName}'", kvp.Key);
                 }
             }
 
             _clients.Clear();
             _trackerClients.Clear();
+
+            _logger.LogInformation("FastDFSClientFactory disposed successfully");
 
             GC.SuppressFinalize(this);
         }

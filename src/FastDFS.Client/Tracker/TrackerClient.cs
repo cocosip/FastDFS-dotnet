@@ -8,6 +8,8 @@ using FastDFS.Client.Connection;
 using FastDFS.Client.Exceptions;
 using FastDFS.Client.Protocol.Requests;
 using FastDFS.Client.Protocol.Responses;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FastDFS.Client.Tracker
 {
@@ -20,6 +22,7 @@ namespace FastDFS.Client.Tracker
         private readonly List<TrackerServerEndpoint> _trackerEndpoints;
         private readonly Dictionary<string, IConnectionPool> _connectionPools;
         private readonly ConnectionPoolConfiguration _poolOptions;
+        private readonly ILogger _logger;
         private int _currentTrackerIndex;
         private bool _disposed;
 
@@ -38,7 +41,11 @@ namespace FastDFS.Client.Tracker
         /// </summary>
         /// <param name="trackerServers">List of tracker server addresses in the format "host:port".</param>
         /// <param name="configuration">Connection pool options.</param>
-        public TrackerClient(IEnumerable<string> trackerServers, ConnectionPoolConfiguration configuration)
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        public TrackerClient(
+            IEnumerable<string> trackerServers,
+            ConnectionPoolConfiguration configuration,
+            ILoggerFactory? loggerFactory = null)
         {
             if (trackerServers == null || !trackerServers.Any())
                 throw new ArgumentException("At least one tracker server must be specified.", nameof(trackerServers));
@@ -48,6 +55,7 @@ namespace FastDFS.Client.Tracker
             configuration.Validate();
 
             _poolOptions = configuration;
+            _logger = loggerFactory?.CreateLogger<TrackerClient>() ?? NullLogger<TrackerClient>.Instance;
             _trackerEndpoints = [];
             _connectionPools = [];
             _currentTrackerIndex = 0;
@@ -71,8 +79,12 @@ namespace FastDFS.Client.Tracker
                 _trackerEndpoints.Add(endpoint);
 
                 // Create a connection pool for each tracker server
-                _connectionPools[endpoint.Key] = new ConnectionPool(endpoint.Host, endpoint.Port, _poolOptions);
+                var poolLogger = loggerFactory?.CreateLogger<ConnectionPool>();
+                _connectionPools[endpoint.Key] = new ConnectionPool(endpoint.Host, endpoint.Port, _poolOptions, poolLogger);
             }
+
+            _logger.LogInformation("TrackerClient initialized with {TrackerCount} tracker server(s): {TrackerSerkers}",
+                _trackerEndpoints.Count, string.Join(", ", _trackerEndpoints.Select(e => e.Key)));
         }
 
         /// <summary>
@@ -85,6 +97,8 @@ namespace FastDFS.Client.Tracker
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(TrackerClient));
+
+            _logger.LogDebug("Querying storage for upload, group={GroupName}", groupName ?? "(auto-select)");
 
             return await ExecuteWithFailoverAsync(async (pool) =>
             {
@@ -306,6 +320,9 @@ namespace FastDFS.Client.Tracker
                 var endpoint = _trackerEndpoints[currentIndex];
                 var pool = _connectionPools[endpoint.Key];
 
+                _logger.LogDebug("Attempting operation on tracker {Tracker} (attempt {Attempt}/{MaxAttempts})",
+                    endpoint.Key, attempts + 1, maxAttempts);
+
                 try
                 {
                     var result = await operation(pool).ConfigureAwait(false);
@@ -313,28 +330,45 @@ namespace FastDFS.Client.Tracker
                     // Success - update the current tracker index for next request
                     _currentTrackerIndex = currentIndex;
 
+                    if (attempts > 0)
+                    {
+                        _logger.LogInformation("Operation succeeded on tracker {Tracker} after {Attempts} failed attempt(s)",
+                            endpoint.Key, attempts);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Operation succeeded on tracker {Tracker}", endpoint.Key);
+                    }
+
                     return result;
                 }
                 catch (FastDFSNetworkException ex)
                 {
                     // Network error - try next tracker
+                    _logger.LogWarning(ex, "Network error on tracker {Tracker}, attempting failover (attempt {Attempt}/{MaxAttempts})",
+                        endpoint.Key, attempts + 1, maxAttempts);
                     lastException = ex;
                     attempts++;
                 }
                 catch (TimeoutException ex)
                 {
                     // Timeout - try next tracker
+                    _logger.LogWarning(ex, "Timeout on tracker {Tracker}, attempting failover (attempt {Attempt}/{MaxAttempts})",
+                        endpoint.Key, attempts + 1, maxAttempts);
                     lastException = ex;
                     attempts++;
                 }
-                catch
+                catch (Exception ex)
                 {
                     // Other errors (protocol errors, etc.) should not trigger failover
+                    _logger.LogError(ex, "Non-recoverable error on tracker {Tracker}", endpoint.Key);
                     throw;
                 }
             }
 
             // All tracker servers failed
+            _logger.LogError(lastException, "All {TrackerCount} tracker server(s) failed after {MaxAttempts} attempts",
+                _trackerEndpoints.Count, maxAttempts);
             throw new FastDFSException(
                 $"All tracker servers failed after {maxAttempts} attempts. Last error: {lastException?.Message}",
                 lastException!);

@@ -1,25 +1,29 @@
 using System;
 using System.Buffers;
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using FastDFS.Client.Exceptions;
 using FastDFS.Client.Protocol;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FastDFS.Client.Connection
 {
     /// <summary>
     /// Represents a TCP connection to a FastDFS server (Tracker or Storage).
+    /// Uses high-performance Socket for better performance and control.
     /// </summary>
     public class FastDFSConnection : IDisposable
     {
-        private readonly TcpClient _tcpClient;
-        private NetworkStream? _stream;
+        private Socket? _socket;
         private readonly string _host;
         private readonly int _port;
         private readonly int _sendTimeout;
         private readonly int _receiveTimeout;
+        private readonly ILogger _logger;
         private bool _disposed;
 
         /// <summary>
@@ -44,23 +48,18 @@ namespace FastDFS.Client.Connection
         {
             get
             {
-                if (_disposed || _tcpClient == null)
+                if (_disposed || _socket == null)
                     return false;
 
                 try
                 {
-                    // Check if the socket is connected and available
-                    if (!_tcpClient.Connected)
-                        return false;
-
-                    // Additional check: try to peek at the data
-                    var socket = _tcpClient.Client;
-                    if (socket == null || !socket.Connected)
+                    // Check if the socket is connected
+                    if (!_socket.Connected)
                         return false;
 
                     // Poll for read with zero timeout to detect if the connection is closed
-                    bool poll = socket.Poll(1000, SelectMode.SelectRead);
-                    bool available = socket.Available == 0;
+                    bool poll = _socket.Poll(1000, SelectMode.SelectRead);
+                    bool available = _socket.Available == 0;
 
                     // If Poll returns true and there's no data available, the connection is likely closed
                     if (poll && available)
@@ -82,7 +81,8 @@ namespace FastDFS.Client.Connection
         /// <param name="port">The server port.</param>
         /// <param name="sendTimeout">The send timeout in milliseconds (0 = infinite).</param>
         /// <param name="receiveTimeout">The receive timeout in milliseconds (0 = infinite).</param>
-        public FastDFSConnection(string host, int port, int sendTimeout = 30000, int receiveTimeout = 30000)
+        /// <param name="logger">Optional logger instance.</param>
+        public FastDFSConnection(string host, int port, int sendTimeout = 30000, int receiveTimeout = 30000, ILogger<FastDFSConnection>? logger = null)
         {
             if (string.IsNullOrWhiteSpace(host))
                 throw new ArgumentException("Host cannot be null or empty.", nameof(host));
@@ -93,13 +93,13 @@ namespace FastDFS.Client.Connection
             _port = port;
             _sendTimeout = sendTimeout;
             _receiveTimeout = receiveTimeout;
-            _tcpClient = new TcpClient();
+            _logger = logger ?? NullLogger<FastDFSConnection>.Instance;
             CreatedTime = DateTime.UtcNow;
             LastUsedTime = CreatedTime;
         }
 
         /// <summary>
-        /// Connects to the FastDFS server asynchronously.
+        /// Connects to the FastDFS server asynchronously using high-performance Socket.
         /// </summary>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
@@ -110,19 +110,45 @@ namespace FastDFS.Client.Connection
 
             try
             {
-                await _tcpClient.ConnectAsync(_host, _port).ConfigureAwait(false);
-                _stream = _tcpClient.GetStream();
+                _logger.LogDebug("Resolving DNS for {Host}...", _host);
+
+                // Resolve DNS asynchronously
+                var addresses = await Dns.GetHostAddressesAsync(_host).ConfigureAwait(false);
+                if (addresses == null || addresses.Length == 0)
+                    throw new SocketException((int)SocketError.HostNotFound);
+
+                // Create socket based on address family
+                var address = addresses[0];
+                _socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+
+                // Configure socket options for better performance
+                _socket.NoDelay = true; // Disable Nagle's algorithm for low latency
+                _socket.SendBufferSize = 64 * 1024; // 64KB send buffer
+                _socket.ReceiveBufferSize = 64 * 1024; // 64KB receive buffer
 
                 // Set timeouts
                 if (_sendTimeout > 0)
-                    _stream.WriteTimeout = _sendTimeout;
+                    _socket.SendTimeout = _sendTimeout;
                 if (_receiveTimeout > 0)
-                    _stream.ReadTimeout = _receiveTimeout;
+                    _socket.ReceiveTimeout = _receiveTimeout;
+
+                _logger.LogDebug("Connecting to {Endpoint} (IP: {IP})...", RemoteEndpoint, address);
+
+                // Connect asynchronously
+                var endpoint = new IPEndPoint(address, _port);
+                await _socket.ConnectAsync(endpoint).ConfigureAwait(false);
 
                 LastUsedTime = DateTime.UtcNow;
+                _logger.LogInformation("Successfully connected to {Endpoint}", RemoteEndpoint);
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Failed to connect to {Endpoint}", RemoteEndpoint);
+
+                // Clean up socket on failure
+                _socket?.Dispose();
+                _socket = null;
+
                 throw new FastDFSNetworkException(
                     $"Failed to connect to {RemoteEndpoint}.",
                     RemoteEndpoint,
@@ -146,13 +172,15 @@ namespace FastDFS.Client.Connection
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(FastDFSConnection));
-            if (_stream == null)
+            if (_socket == null || !_socket.Connected)
                 throw new InvalidOperationException("Connection is not established. Call ConnectAsync first.");
             if (request == null)
                 throw new ArgumentNullException(nameof(request));
 
             try
             {
+                _logger.LogDebug("Sending request to {Endpoint}: {RequestType}", RemoteEndpoint, typeof(TRequest).Name);
+
                 // Send the request
                 await SendAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -161,15 +189,19 @@ namespace FastDFS.Client.Connection
 
                 LastUsedTime = DateTime.UtcNow;
 
+                _logger.LogDebug("Received response from {Endpoint}: {ResponseType}", RemoteEndpoint, typeof(TResponse).Name);
+
                 return response;
             }
-            catch (FastDFSException)
+            catch (FastDFSException ex)
             {
+                _logger.LogWarning(ex, "FastDFS protocol error communicating with {Endpoint}", RemoteEndpoint);
                 // Re-throw FastDFS-specific exceptions
                 throw;
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Network error communicating with {Endpoint}", RemoteEndpoint);
                 throw new FastDFSNetworkException(
                     $"Error communicating with {RemoteEndpoint}.",
                     RemoteEndpoint,
@@ -178,24 +210,39 @@ namespace FastDFS.Client.Connection
         }
 
         /// <summary>
-        /// Sends a request packet to the server asynchronously.
+        /// Sends a request packet to the server asynchronously using Socket.
         /// </summary>
         /// <param name="request">The request to send.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         private async Task SendAsync(IFastDFSRequest request, CancellationToken cancellationToken)
         {
-            if (_stream == null)
-                throw new InvalidOperationException("Network stream is not available.");
+            if (_socket == null || !_socket.Connected)
+                throw new InvalidOperationException("Socket is not connected.");
 
             byte[] packetBytes = request.Encode();
 
             try
             {
-                await _stream.WriteAsync(packetBytes, 0, packetBytes.Length, cancellationToken).ConfigureAwait(false);
-                await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                _logger.LogTrace("Sending {ByteCount} bytes to {Endpoint}", packetBytes.Length, RemoteEndpoint);
+
+                // Send all bytes using Socket.SendAsync
+                int totalSent = 0;
+                while (totalSent < packetBytes.Length)
+                {
+                    var segment = new ArraySegment<byte>(packetBytes, totalSent, packetBytes.Length - totalSent);
+                    int sent = await _socket.SendAsync(segment, SocketFlags.None).ConfigureAwait(false);
+
+                    if (sent == 0)
+                        throw new SocketException((int)SocketError.ConnectionReset);
+
+                    totalSent += sent;
+                }
+
+                _logger.LogTrace("Successfully sent {ByteCount} bytes to {Endpoint}", packetBytes.Length, RemoteEndpoint);
             }
-            catch (IOException ex)
+            catch (SocketException ex)
             {
+                _logger.LogError(ex, "Failed to send {ByteCount} bytes to {Endpoint}", packetBytes.Length, RemoteEndpoint);
                 throw new FastDFSNetworkException(
                     $"Failed to send data to {RemoteEndpoint}.",
                     RemoteEndpoint,
@@ -204,7 +251,7 @@ namespace FastDFS.Client.Connection
         }
 
         /// <summary>
-        /// Receives a response packet from the server asynchronously.
+        /// Receives a response packet from the server asynchronously using Socket.
         /// </summary>
         /// <typeparam name="TResponse">The response type.</typeparam>
         /// <param name="cancellationToken">Cancellation token.</param>
@@ -212,17 +259,20 @@ namespace FastDFS.Client.Connection
         private async Task<TResponse> ReceiveAsync<TResponse>(CancellationToken cancellationToken)
             where TResponse : IFastDFSResponse, new()
         {
-            if (_stream == null)
-                throw new InvalidOperationException("Network stream is not available.");
+            if (_socket == null || !_socket.Connected)
+                throw new InvalidOperationException("Socket is not connected.");
 
             // Read the header (10 bytes)
             byte[] headerBuffer = ArrayPool<byte>.Shared.Rent(FastDFSHeader.HeaderSize);
             try
             {
-                await ReadExactlyAsync(_stream, headerBuffer, 0, FastDFSHeader.HeaderSize, cancellationToken).ConfigureAwait(false);
+                _logger.LogTrace("Reading header ({HeaderSize} bytes) from {Endpoint}", FastDFSHeader.HeaderSize, RemoteEndpoint);
+                await ReadExactlyAsync(headerBuffer, 0, FastDFSHeader.HeaderSize, cancellationToken).ConfigureAwait(false);
 
                 // Parse the header
                 var header = FastDFSHeader.Parse(headerBuffer, 0);
+                _logger.LogTrace("Received header from {Endpoint}: Command={Command}, Status={Status}, BodyLength={BodyLength}",
+                    RemoteEndpoint, header.Command, header.Status, header.BodyLength);
 
                 // Read the body if present
                 byte[]? bodyBuffer = null;
@@ -230,14 +280,18 @@ namespace FastDFS.Client.Connection
                 {
                     // Validate body length to prevent excessive memory allocation
                     if (header.BodyLength > int.MaxValue)
+                    {
+                        _logger.LogError("Response body length too large from {Endpoint}: {BodyLength} bytes", RemoteEndpoint, header.BodyLength);
                         throw new FastDFSProtocolException($"Response body length is too large: {header.BodyLength} bytes.");
+                    }
 
                     int bodyLength = (int)header.BodyLength;
                     bodyBuffer = ArrayPool<byte>.Shared.Rent(bodyLength);
 
                     try
                     {
-                        await ReadExactlyAsync(_stream, bodyBuffer, 0, bodyLength, cancellationToken).ConfigureAwait(false);
+                        _logger.LogTrace("Reading body ({BodyLength} bytes) from {Endpoint}", bodyLength, RemoteEndpoint);
+                        await ReadExactlyAsync(bodyBuffer, 0, bodyLength, cancellationToken).ConfigureAwait(false);
 
                         // Create the response and decode it
                         var response = new TResponse();
@@ -251,6 +305,7 @@ namespace FastDFS.Client.Connection
                         // Check if the response indicates an error
                         if (!response.IsSuccess)
                         {
+                            _logger.LogWarning("FastDFS server {Endpoint} returned error status: {Status}", RemoteEndpoint, header.Status);
                             throw new FastDFSProtocolException(
                                 $"FastDFS server returned error. Status code: {header.Status}",
                                 header.Status);
@@ -299,28 +354,26 @@ namespace FastDFS.Client.Connection
         }
 
         /// <summary>
-        /// Reads exactly the specified number of bytes from the stream.
+        /// Reads exactly the specified number of bytes from the socket.
         /// </summary>
-        /// <param name="stream">The stream to read from.</param>
         /// <param name="buffer">The buffer to read into.</param>
         /// <param name="offset">The offset in the buffer to start writing.</param>
         /// <param name="count">The number of bytes to read.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
-        private static async Task ReadExactlyAsync(
-            Stream stream,
+        private async Task ReadExactlyAsync(
             byte[] buffer,
             int offset,
             int count,
             CancellationToken cancellationToken)
         {
+            if (_socket == null || !_socket.Connected)
+                throw new InvalidOperationException("Socket is not connected.");
+
             int totalRead = 0;
             while (totalRead < count)
             {
-                int bytesRead = await stream.ReadAsync(
-                    buffer,
-                    offset + totalRead,
-                    count - totalRead,
-                    cancellationToken).ConfigureAwait(false);
+                var segment = new ArraySegment<byte>(buffer, offset + totalRead, count - totalRead);
+                int bytesRead = await _socket.ReceiveAsync(segment, SocketFlags.None).ConfigureAwait(false);
 
                 if (bytesRead == 0)
                 {
@@ -352,10 +405,23 @@ namespace FastDFS.Client.Connection
 
             try
             {
-                _stream?.Close();
-                _stream?.Dispose();
-                _tcpClient?.Close();
-                _tcpClient?.Dispose();
+                // Gracefully shutdown and close the socket
+                if (_socket != null)
+                {
+                    if (_socket.Connected)
+                    {
+                        try
+                        {
+                            _socket.Shutdown(SocketShutdown.Both);
+                        }
+                        catch
+                        {
+                            // Ignore shutdown errors
+                        }
+                    }
+                    _socket.Close();
+                    _socket.Dispose();
+                }
             }
             catch
             {

@@ -13,6 +13,8 @@ using FastDFS.Client.Protocol.Responses;
 using FastDFS.Client.Storage;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FastDFS.Client
 {
@@ -26,10 +28,13 @@ namespace FastDFS.Client
         private readonly ITrackerClient _trackerClient;
         private readonly ConnectionPoolConfiguration _poolOptions;
         private readonly ConcurrentDictionary<string, IConnectionPool> _storagePools;
+        private readonly ILoggerFactory? _loggerFactory;
+        private readonly ILogger _logger;
         private readonly string _name;
         private readonly string? _defaultGroupName;
         private readonly StorageSelectionStrategy _selectionStrategy;
         private readonly IStorageSelector? _storageSelector;
+        private readonly HttpConfiguration? _httpConfig;
         private bool _disposed;
 
         /// <summary>
@@ -40,19 +45,26 @@ namespace FastDFS.Client
         /// <param name="name">The name of this client instance (for multi-cluster scenarios). Default is "default".</param>
         /// <param name="defaultGroupName">Optional: The default group name to use when file IDs don't contain group names.</param>
         /// <param name="selectionStrategy">The storage server selection strategy. Default is TrackerSelection.</param>
+        /// <param name="httpConfig">Optional: HTTP access configuration for FastDFS Nginx module.</param>
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
         public FastDFSClient(
             ITrackerClient trackerClient,
             ConnectionPoolConfiguration poolOptions,
             string name = "default",
             string? defaultGroupName = null,
-            StorageSelectionStrategy selectionStrategy = StorageSelectionStrategy.TrackerSelection)
+            StorageSelectionStrategy selectionStrategy = StorageSelectionStrategy.TrackerSelection,
+            HttpConfiguration? httpConfig = null,
+            ILoggerFactory? loggerFactory = null)
         {
             _trackerClient = trackerClient ?? throw new ArgumentNullException(nameof(trackerClient));
             _poolOptions = poolOptions ?? throw new ArgumentNullException(nameof(poolOptions));
+            _loggerFactory = loggerFactory;
+            _logger = loggerFactory?.CreateLogger<FastDFSClient>() ?? NullLogger<FastDFSClient>.Instance;
             _storagePools = new ConcurrentDictionary<string, IConnectionPool>();
             _name = name ?? "default";
             _defaultGroupName = defaultGroupName;
             _selectionStrategy = selectionStrategy;
+            _httpConfig = httpConfig;
 
             // Create storage selector based on strategy
             _storageSelector = selectionStrategy switch
@@ -63,6 +75,9 @@ namespace FastDFS.Client
                 StorageSelectionStrategy.TrackerSelection => null, // Use tracker's selection
                 _ => null
             };
+
+            _logger.LogInformation("FastDFSClient '{Name}' initialized with selection strategy: {Strategy}, default group: {DefaultGroup}",
+                _name, _selectionStrategy, _defaultGroupName ?? "(none)");
         }
 
         /// <inheritdoc/>
@@ -129,8 +144,13 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(fileExtension))
                 throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
 
+            _logger.LogInformation("Uploading file to group '{GroupName}', size={Size} bytes, extension={Extension}",
+                groupName ?? "(auto-select)", content.Length, fileExtension);
+
             // Select storage server based on configured strategy
             var storageInfo = await SelectStorageForUploadAsync(groupName, cancellationToken).ConfigureAwait(false);
+
+            _logger.LogDebug("Selected storage server {StorageServer} for upload", $"{storageInfo.IpAddress}:{storageInfo.Port}");
 
             // Get or create connection pool for this storage server
             var pool = GetOrCreateStoragePool(storageInfo.IpAddress, storageInfo.Port);
@@ -148,7 +168,14 @@ namespace FastDFS.Client
                 var response = await connection.SendRequestAsync<UploadFileRequest, UploadFileResponse>(request, cancellationToken).ConfigureAwait(false);
 
                 // Return complete file ID: group_name/file_name
-                return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
+                var fileId = FileIdHelper.CombineFileId(response.GroupName, response.FileName);
+                _logger.LogInformation("Successfully uploaded file: {FileId}", fileId);
+                return fileId;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to upload file to storage server {StorageServer}", $"{storageInfo.IpAddress}:{storageInfo.Port}");
+                throw;
             }
             finally
             {
@@ -257,8 +284,12 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(fileName))
                 throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
 
+            _logger.LogInformation("Downloading file: group={GroupName}, file={FileName}", groupName, fileName);
+
             // Select storage server based on configured strategy
             var storageInfo = await SelectStorageForDownloadAsync(groupName!, fileName, cancellationToken).ConfigureAwait(false);
+
+            _logger.LogDebug("Selected storage server {StorageServer} for download", $"{storageInfo.IpAddress}:{storageInfo.Port}");
 
             // Get or create connection pool for this storage server
             var pool = GetOrCreateStoragePool(storageInfo.IpAddress, storageInfo.Port);
@@ -276,7 +307,14 @@ namespace FastDFS.Client
 
                 var response = await connection.SendRequestAsync<DownloadFileRequest, DownloadFileResponse>(request, cancellationToken).ConfigureAwait(false);
 
+                _logger.LogInformation("Successfully downloaded file: group={GroupName}, file={FileName}, size={Size} bytes",
+                    groupName, fileName, response.Content.Length);
                 return response.Content;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to download file from storage server {StorageServer}", $"{storageInfo.IpAddress}:{storageInfo.Port}");
+                throw;
             }
             finally
             {
@@ -734,7 +772,11 @@ namespace FastDFS.Client
         private IConnectionPool GetOrCreateStoragePool(string host, int port)
         {
             var key = $"{host}:{port}";
-            return _storagePools.GetOrAdd(key, _ => new ConnectionPool(host, port, _poolOptions));
+            return _storagePools.GetOrAdd(key, _ =>
+            {
+                var poolLogger = _loggerFactory?.CreateLogger<ConnectionPool>();
+                return new ConnectionPool(host, port, _poolOptions, poolLogger);
+            });
         }
 
         /// <summary>
@@ -772,6 +814,121 @@ namespace FastDFS.Client
                 // Use default group name if available
                 groupName = _defaultGroupName;
             }
+        }
+
+        // ==================== HTTP URL Operations ====================
+
+        /// <inheritdoc />
+        public Task<string> GetFileUrlAsync(string fileId, string? attachmentFilename = null, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            if (_httpConfig == null)
+                throw new InvalidOperationException("HTTP configuration is not enabled. Please configure HttpConfig in FastDFSConfiguration.");
+
+            ParseFileIdWithDefault(fileId, out string groupName, out string fileName);
+
+            return GetFileUrlAsync(groupName, fileName, attachmentFilename, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public async Task<string> GetFileUrlAsync(string? groupName, string fileName, string? attachmentFilename = null, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            if (_httpConfig == null)
+                throw new InvalidOperationException("HTTP configuration is not enabled. Please configure HttpConfig in FastDFSConfiguration.");
+
+            NormalizeGroupAndFileName(ref groupName, ref fileName);
+
+            if (string.IsNullOrEmpty(groupName))
+                throw new ArgumentException("Group name cannot be determined. Provide groupName or configure DefaultGroupName.", nameof(groupName));
+
+            // Query storage server to get its IP address
+            var storageInfo = await _trackerClient.QueryStorageForDownloadAsync(groupName!, fileName, cancellationToken);
+
+            // Get HTTP server URL for this group
+            string baseUrl = _httpConfig.GetServerUrl(groupName!, storageInfo.IpAddress);
+
+            // Build file path: /groupName/fileName
+            string filePath = $"/{groupName}/{fileName.TrimStart('/')}";
+
+            // Build URL
+            string url = baseUrl + filePath;
+
+            // Add attachment filename if specified
+            if (!string.IsNullOrWhiteSpace(attachmentFilename))
+            {
+                url += $"?attname={Uri.EscapeDataString(attachmentFilename)}";
+            }
+
+            return url;
+        }
+
+        /// <inheritdoc />
+        public Task<string> GetFileUrlWithTokenAsync(string fileId, int? expireSeconds = null, string? attachmentFilename = null, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            if (_httpConfig == null)
+                throw new InvalidOperationException("HTTP configuration is not enabled. Please configure HttpConfig in FastDFSConfiguration.");
+
+            if (!_httpConfig.AntiStealTokenEnabled)
+                throw new InvalidOperationException("Anti-steal token is not enabled. Set AntiStealTokenEnabled to true in HttpConfiguration.");
+
+            ParseFileIdWithDefault(fileId, out string groupName, out string fileName);
+
+            return GetFileUrlWithTokenAsync(groupName, fileName, expireSeconds, attachmentFilename, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public async Task<string> GetFileUrlWithTokenAsync(string? groupName, string fileName, int? expireSeconds = null, string? attachmentFilename = null, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            if (_httpConfig == null)
+                throw new InvalidOperationException("HTTP configuration is not enabled. Please configure HttpConfig in FastDFSConfiguration.");
+
+            if (!_httpConfig.AntiStealTokenEnabled)
+                throw new InvalidOperationException("Anti-steal token is not enabled. Set AntiStealTokenEnabled to true in HttpConfiguration.");
+
+            if (string.IsNullOrWhiteSpace(_httpConfig.SecretKey))
+                throw new InvalidOperationException("Secret key is not configured. Set SecretKey in HttpConfiguration.");
+
+            NormalizeGroupAndFileName(ref groupName, ref fileName);
+
+            if (string.IsNullOrEmpty(groupName))
+                throw new ArgumentException("Group name cannot be determined. Provide groupName or configure DefaultGroupName.", nameof(groupName));
+
+            // Query storage server to get its IP address
+            var storageInfo = await _trackerClient.QueryStorageForDownloadAsync(groupName!, fileName, cancellationToken);
+
+            // Get HTTP server URL for this group
+            string baseUrl = _httpConfig.GetServerUrl(groupName!, storageInfo.IpAddress);
+
+            // Build file ID for token generation (without leading slash)
+            string fileIdForToken = $"{groupName}/{fileName.TrimStart('/')}";
+
+            // Generate token
+            int actualExpireSeconds = expireSeconds ?? _httpConfig.DefaultTokenExpireSeconds;
+            var (token, timestamp) = Utilities.TokenGenerator.GenerateTokenWithExpire(
+                fileIdForToken,
+                _httpConfig.SecretKey!,
+                actualExpireSeconds);
+
+            // Build file path: /groupName/fileName
+            string filePath = $"/{fileIdForToken}";
+
+            // Build URL with token and timestamp
+            string url = $"{baseUrl}{filePath}?token={token}&ts={timestamp}";
+
+            // Add attachment filename if specified
+            if (!string.IsNullOrWhiteSpace(attachmentFilename))
+            {
+                url += $"&attname={Uri.EscapeDataString(attachmentFilename)}";
+            }
+
+            return url;
         }
 
         /// <summary>

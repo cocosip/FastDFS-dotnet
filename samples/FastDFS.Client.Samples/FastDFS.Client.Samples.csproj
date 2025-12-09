@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FastDFS.Client\FastDFS.Client.csproj" />
+    <ProjectReference Include="..\..\src\FastDFS.Client.DependencyInjection\FastDFS.Client.DependencyInjection.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
