@@ -104,6 +104,11 @@ jobs:
       packages: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
@@ -115,6 +120,125 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION=${VERSION#v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep -v "^${GITHUB_REF#refs/tags/}$" | head -n 1)
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous tag found, using all commits"
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          echo "Generating release notes from $PREVIOUS_TAG to ${GITHUB_REF#refs/tags/}"
+
+          # Generate changelog with categorized commits
+          {
+            echo "## 📦 FastDFS .NET Client ${{ steps.get_version.outputs.VERSION }}"
+            echo ""
+            echo "### What's Changed"
+            echo ""
+
+            # Features
+            FEATURES=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^feat(\(.*\))?:" || true)
+            if [ ! -z "$FEATURES" ]; then
+              echo "#### ✨ Features"
+              echo "$FEATURES" | sed 's/^feat/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Bug Fixes
+            FIXES=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^fix(\(.*\))?:" || true)
+            if [ ! -z "$FIXES" ]; then
+              echo "#### 🐛 Bug Fixes"
+              echo "$FIXES" | sed 's/^fix/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Performance Improvements
+            PERF=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^perf(\(.*\))?:" || true)
+            if [ ! -z "$PERF" ]; then
+              echo "#### ⚡ Performance Improvements"
+              echo "$PERF" | sed 's/^perf/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Documentation
+            DOCS=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^docs(\(.*\))?:" || true)
+            if [ ! -z "$DOCS" ]; then
+              echo "#### 📚 Documentation"
+              echo "$DOCS" | sed 's/^docs/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Build & CI/CD
+            BUILD=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^(build|ci)(\(.*\))?:" || true)
+            if [ ! -z "$BUILD" ]; then
+              echo "#### 🔧 Build & CI/CD"
+              echo "$BUILD" | sed 's/^build/- /' | sed 's/^ci/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Refactoring
+            REFACTOR=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^refactor(\(.*\))?:" || true)
+            if [ ! -z "$REFACTOR" ]; then
+              echo "#### ♻️ Code Refactoring"
+              echo "$REFACTOR" | sed 's/^refactor/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Tests
+            TESTS=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -E "^test(\(.*\))?:" || true)
+            if [ ! -z "$TESTS" ]; then
+              echo "#### 🧪 Tests"
+              echo "$TESTS" | sed 's/^test/- /' | sed 's/^- (\(.*\)):/- **\1:**/'
+              echo ""
+            fi
+
+            # Other changes
+            OTHER=$(git log $PREVIOUS_TAG..HEAD --pretty=format:"%s" --no-merges | grep -vE "^(feat|fix|docs|style|refactor|perf|test|build|ci)(\(.*\))?:" || true)
+            if [ ! -z "$OTHER" ]; then
+              echo "#### 🔀 Other Changes"
+              echo "$OTHER" | sed 's/^/- /'
+              echo ""
+            fi
+
+            # Contributors
+            echo "### 👥 Contributors"
+            git log $PREVIOUS_TAG..HEAD --pretty=format:"%an" --no-merges | sort -u | sed 's/^/- @/' | sed 's/@Claude Sonnet 4.5/🤖 Claude Sonnet 4.5/'
+            echo ""
+
+            # Installation
+            echo "### 📥 Installation"
+            echo ""
+            echo "\`\`\`bash"
+            echo "dotnet add package FastDFS.Client --version ${{ steps.get_version.outputs.VERSION }}"
+            echo "dotnet add package FastDFS.Client.DependencyInjection --version ${{ steps.get_version.outputs.VERSION }}"
+            echo "\`\`\`"
+            echo ""
+
+            # Links
+            echo "### 🔗 Links"
+            echo "- [NuGet Package - FastDFS.Client](https://www.nuget.org/packages/FastDFS.Client/${{ steps.get_version.outputs.VERSION }})"
+            echo "- [NuGet Package - FastDFS.Client.DependencyInjection](https://www.nuget.org/packages/FastDFS.Client.DependencyInjection/${{ steps.get_version.outputs.VERSION }})"
+            echo "- [Full Changelog](https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...${{ steps.get_version.outputs.TAG_NAME }})"
+
+          } > release_notes.md
+
+          # Output for GitHub Actions
+          echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
+          cat release_notes.md
+
       - name: Publish to NuGet
         run: |
           for package in ./artifacts/*.nupkg
@@ -124,9 +248,12 @@ jobs:
           done
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ./artifacts/*.nupkg
-          generate_release_notes: true
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
