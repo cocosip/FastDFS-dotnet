@@ -172,6 +172,164 @@ public class FileService
 }
 ```
 
+#### 1.3 运行时动态注册客户端
+
+对于需要在程序运行时才能获取配置的场景（例如从数据库、配置中心等动态加载），可以使用 `RegisterClient` 方法：
+
+**场景示例：从数据库加载配置**
+
+```csharp
+using FastDFS.Client;
+using FastDFS.Client.Configuration;
+
+public class DynamicClusterService
+{
+    private readonly IFastDFSClientFactory _factory;
+    private readonly ILogger<DynamicClusterService> _logger;
+
+    public DynamicClusterService(IFastDFSClientFactory factory, ILogger<DynamicClusterService> logger)
+    {
+        _factory = factory;
+        _logger = logger;
+    }
+
+    // 从数据库动态加载并注册新集群
+    public async Task<IFastDFSClient> RegisterClusterFromDatabaseAsync(string tenantId)
+    {
+        // 从数据库获取租户的 FastDFS 配置
+        var clusterConfig = await GetClusterConfigFromDatabaseAsync(tenantId);
+
+        // 创建配置对象
+        var configuration = new FastDFSConfiguration
+        {
+            TrackerServers = clusterConfig.TrackerServers.ToList(),
+            ConnectionPool = new ConnectionPoolConfiguration
+            {
+                MaxConnectionPerServer = clusterConfig.MaxConnections,
+                MinConnectionPerServer = clusterConfig.MinConnections,
+                ConnectionIdleTimeout = 300,
+                ConnectionLifetime = 3600
+            },
+            NetworkTimeout = 30,
+            Charset = "UTF-8"
+        };
+
+        // 动态注册客户端（如果已存在则会被替换）
+        var client = _factory.RegisterClient($"tenant_{tenantId}", configuration);
+
+        _logger.LogInformation("Successfully registered FastDFS client for tenant {TenantId}", tenantId);
+
+        return client;
+    }
+
+    // 获取或注册客户端
+    public async Task<IFastDFSClient> GetOrRegisterClientAsync(string tenantId)
+    {
+        var clientName = $"tenant_{tenantId}";
+
+        // 检查客户端是否已注册
+        if (_factory.HasClient(clientName))
+        {
+            return _factory.GetClient(clientName);
+        }
+
+        // 如果不存在，则动态注册
+        return await RegisterClusterFromDatabaseAsync(tenantId);
+    }
+
+    // 移除不再使用的客户端
+    public void RemoveClient(string tenantId)
+    {
+        var clientName = $"tenant_{tenantId}";
+        if (_factory.RemoveClient(clientName))
+        {
+            _logger.LogInformation("Removed FastDFS client for tenant {TenantId}", tenantId);
+        }
+    }
+
+    private async Task<ClusterConfig> GetClusterConfigFromDatabaseAsync(string tenantId)
+    {
+        // 实际实现：从数据库查询配置
+        // 这里仅作示例
+        await Task.CompletedTask;
+        return new ClusterConfig
+        {
+            TrackerServers = new[] { "192.168.1.100:22122" },
+            MaxConnections = 50,
+            MinConnections = 5
+        };
+    }
+}
+
+// 配置数据模型
+public class ClusterConfig
+{
+    public string[] TrackerServers { get; set; } = Array.Empty<string>();
+    public int MaxConnections { get; set; }
+    public int MinConnections { get; set; }
+}
+```
+
+**使用示例：**
+
+```csharp
+public class FileUploadController : ControllerBase
+{
+    private readonly DynamicClusterService _clusterService;
+
+    public FileUploadController(DynamicClusterService clusterService)
+    {
+        _clusterService = clusterService;
+    }
+
+    [HttpPost("upload/{tenantId}")]
+    public async Task<IActionResult> UploadFile(string tenantId, IFormFile file)
+    {
+        // 获取或注册租户专属的 FastDFS 客户端
+        var client = await _clusterService.GetOrRegisterClientAsync(tenantId);
+
+        using var stream = file.OpenReadStream();
+        var fileId = await client.UploadAsync(null, stream, Path.GetExtension(file.FileName));
+
+        return Ok(new { FileId = fileId });
+    }
+}
+```
+
+**启动时配置（可选）：**
+
+如果启动时不需要注册任何客户端，只需要注册 Factory 即可：
+
+```csharp
+// Program.cs
+using FastDFS.Client.DependencyInjection;
+
+// 只注册 Factory，不注册任何客户端
+// 后续通过 RegisterClient 动态注册
+services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
+services.AddSingleton<IOptionsMonitor<FastDFSConfiguration>, OptionsMonitor<FastDFSConfiguration>>();
+
+// 或者也可以注册一个默认客户端，然后在运行时注册其他客户端
+services.AddFastDFS("default", options => {
+    options.TrackerServers = new[] { "192.168.1.100:22122" };
+});
+```
+
+**关键特性：**
+
+- **运行时注册**：无需在启动时知道所有配置，可在程序运行时动态注册
+- **配置来源灵活**：支持从数据库、配置中心、API 等任何来源获取配置
+- **替换现有客户端**：如果客户端名称已存在，`RegisterClient` 会先释放旧客户端再创建新的
+- **移除客户端**：使用 `RemoveClient` 可以释放不再使用的客户端资源
+- **线程安全**：所有操作都是线程安全的，可在多线程环境中安全使用
+
+**适用场景：**
+
+- **多租户 SaaS 应用**：每个租户使用独立的 FastDFS 集群
+- **动态配置中心**：从 Apollo、Nacos 等配置中心动态加载配置
+- **配置热更新**：在运行时更新集群配置而无需重启应用
+- **按需加载**：只在需要时才加载特定集群的配置，减少启动时间
+
 ### 方式 2: 非 DI 模式
 
 ```csharp

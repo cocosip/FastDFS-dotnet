@@ -217,6 +217,83 @@ namespace FastDFS.Client
             }
         }
 
+        /// <inheritdoc/>
+        public IFastDFSClient RegisterClient(string name, FastDFSConfiguration configuration)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Client name cannot be null or empty.", nameof(name));
+            if (configuration == null)
+                throw new ArgumentNullException(nameof(configuration));
+
+            ThrowIfDisposed();
+
+            // Validate configuration
+            configuration.Validate();
+
+            lock (_lock)
+            {
+                // Remove existing client if it exists
+                if (_clients.ContainsKey(name))
+                {
+                    RemoveClientInternal(name);
+                }
+
+                // Store configuration
+                _options[name] = configuration;
+
+                // Create and return client
+                var client = FastDFSClientBuilder.CreateClient(configuration, name);
+                _clients[name] = client;
+
+                return client;
+            }
+        }
+
+        /// <inheritdoc/>
+        public bool RemoveClient(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            ThrowIfDisposed();
+
+            lock (_lock)
+            {
+                return RemoveClientInternal(name);
+            }
+        }
+
+        /// <summary>
+        /// Internal method to remove a client. Must be called within a lock.
+        /// </summary>
+        private bool RemoveClientInternal(string name)
+        {
+            bool removed = false;
+
+            // Remove client
+            if (_clients.TryGetValue(name, out var client))
+            {
+                _clients.Remove(name);
+
+                try
+                {
+                    if (client is IDisposable disposableClient)
+                        disposableClient.Dispose();
+                }
+                catch
+                {
+                    // Suppress exceptions during disposal
+                }
+
+                removed = true;
+            }
+
+            // Remove configuration
+            _options.Remove(name);
+
+            return removed;
+        }
+
         /// <summary>
         /// Throws ObjectDisposedException if the manager has been disposed.
         /// </summary>
