@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Tracker;
 
@@ -15,25 +16,16 @@ namespace FastDFS.Client
         /// <summary>
         /// Creates a FastDFS client with the specified options.
         /// </summary>
-        /// <param name="configuration">The FastDFS options.</param>
-        /// <param name="name">Optional: The client name. Default is "default".</param>
-        /// <returns>A new IFastDFSClient instance.</returns>
-        /// <exception cref="ArgumentNullException">Thrown when options is null.</exception>
-        /// <exception cref="ArgumentException">Thrown when options are invalid.</exception>
         public static IFastDFSClient CreateClient(FastDFSConfiguration configuration, string name = "default")
         {
             if (configuration == null)
                 throw new ArgumentNullException(nameof(configuration));
 
-            // Validate options
             configuration.Validate();
 
-            // Create tracker client
             var trackerEndpoints = configuration.TrackerServers.ToList();
             var trackerClient = new TrackerClient(trackerEndpoints, configuration.ConnectionPool);
 
-            // Create and return FastDFS client
-            // FastDFSClient will manage its own storage server connection pools internally
             return new FastDFSClient(
                 trackerClient,
                 configuration.ConnectionPool,
@@ -46,12 +38,6 @@ namespace FastDFS.Client
         /// <summary>
         /// Creates a FastDFS client with manual configuration.
         /// </summary>
-        /// <param name="trackerServers">The tracker server endpoints (format: "host:port").</param>
-        /// <param name="configureConnectionPool">Optional: Configure connection pool options.</param>
-        /// <param name="name">Optional: The client name. Default is "default".</param>
-        /// <returns>A new IFastDFSClient instance.</returns>
-        /// <exception cref="ArgumentNullException">Thrown when trackerServers is null.</exception>
-        /// <exception cref="ArgumentException">Thrown when trackerServers is empty or invalid.</exception>
         public static IFastDFSClient CreateClient(
             IEnumerable<string> trackerServers,
             Action<ConnectionPoolConfiguration>? configureConnectionPool = null,
@@ -69,7 +55,6 @@ namespace FastDFS.Client
                 TrackerServers = serverList
             };
 
-            // Configure connection pool if provided
             configureConnectionPool?.Invoke(options.ConnectionPool);
 
             return CreateClient(options, name);
@@ -78,10 +63,6 @@ namespace FastDFS.Client
         /// <summary>
         /// Creates a FastDFS client with a single tracker server.
         /// </summary>
-        /// <param name="trackerServer">The tracker server endpoint (format: "host:port").</param>
-        /// <param name="name">Optional: The client name. Default is "default".</param>
-        /// <returns>A new IFastDFSClient instance.</returns>
-        /// <exception cref="ArgumentException">Thrown when trackerServer is null or empty.</exception>
         public static IFastDFSClient CreateClient(string trackerServer, string name = "default")
         {
             if (string.IsNullOrWhiteSpace(trackerServer))
@@ -93,12 +74,21 @@ namespace FastDFS.Client
 
     /// <summary>
     /// Manager for multiple FastDFS client instances in non-DI scenarios.
-    /// Allows managing multiple named clients similar to IFastDFSClientFactory but without DI.
+    /// Clients with identical configurations share the same underlying connection pool.
     /// </summary>
     public class FastDFSClientManager : IFastDFSClientFactory, IDisposable
     {
-        private readonly Dictionary<string, IFastDFSClient> _clients;
-        private readonly Dictionary<string, FastDFSConfiguration> _options;
+        // name -> config (for lazy creation via AddClient)
+        private readonly Dictionary<string, FastDFSConfiguration> _options = new();
+
+        // name -> client instance (multiple names may point to the same physical instance)
+        private readonly Dictionary<string, IFastDFSClient> _clients = new();
+
+        // Shared physical clients keyed by config fingerprint (all protected by _lock)
+        private readonly Dictionary<string, IFastDFSClient> _sharedClients = new();
+        private readonly Dictionary<string, int> _sharedRefCounts = new();
+        private readonly Dictionary<string, string> _nameToConfigKey = new();
+
         private readonly object _lock = new object();
         private bool _disposed;
 
@@ -107,18 +97,11 @@ namespace FastDFS.Client
         /// <summary>
         /// Initializes a new instance of the <see cref="FastDFSClientManager"/> class.
         /// </summary>
-        public FastDFSClientManager()
-        {
-            _clients = [];
-            _options = [];
-        }
+        public FastDFSClientManager() { }
 
         /// <summary>
-        /// Adds a named client configuration.
-        /// The client will be created lazily on first access.
+        /// Adds a named client configuration. The client will be created lazily on first access.
         /// </summary>
-        /// <param name="name">The client name.</param>
-        /// <param name="options">The FastDFS options.</param>
         public void AddClient(string name, FastDFSConfiguration options)
         {
             if (string.IsNullOrWhiteSpace(name))
@@ -138,9 +121,6 @@ namespace FastDFS.Client
         /// <summary>
         /// Adds a named client configuration with manual settings.
         /// </summary>
-        /// <param name="name">The client name.</param>
-        /// <param name="trackerServers">The tracker server endpoints.</param>
-        /// <param name="poolConfigurer">Optional: Configure connection pool options.</param>
         public void AddClient(
             string name,
             IEnumerable<string> trackerServers,
@@ -160,10 +140,7 @@ namespace FastDFS.Client
         }
 
         /// <inheritdoc/>
-        public IFastDFSClient GetClient()
-        {
-            return GetClient(DefaultClientName);
-        }
+        public IFastDFSClient GetClient() => GetClient(DefaultClientName);
 
         /// <inheritdoc/>
         public IFastDFSClient GetClient(string name)
@@ -173,21 +150,17 @@ namespace FastDFS.Client
 
             ThrowIfDisposed();
 
-            // Try to get existing client
             lock (_lock)
             {
                 if (_clients.TryGetValue(name, out var existingClient))
                     return existingClient;
 
-                // Create new client
                 if (!_options.TryGetValue(name, out var options))
-                {
-                    throw new InvalidOperationException($"No configuration found for client '{name}'. Please call AddClient(\"{name}\", ...) first.");
-                }
+                    throw new InvalidOperationException(
+                        $"No configuration found for client '{name}'. Please call AddClient(\"{name}\", ...) first.");
 
-                var client = FastDFSClientBuilder.CreateClient(options, name);
+                var client = GetOrCreateSharedClient(name, options);
                 _clients[name] = client;
-
                 return client;
             }
         }
@@ -227,24 +200,17 @@ namespace FastDFS.Client
 
             ThrowIfDisposed();
 
-            // Validate configuration
             configuration.Validate();
 
             lock (_lock)
             {
-                // Remove existing client if it exists
                 if (_clients.ContainsKey(name))
-                {
                     RemoveClientInternal(name);
-                }
 
-                // Store configuration
                 _options[name] = configuration;
 
-                // Create and return client
-                var client = FastDFSClientBuilder.CreateClient(configuration, name);
+                var client = GetOrCreateSharedClient(name, configuration);
                 _clients[name] = client;
-
                 return client;
             }
         }
@@ -264,39 +230,102 @@ namespace FastDFS.Client
         }
 
         /// <summary>
-        /// Internal method to remove a client. Must be called within a lock.
+        /// Returns an existing shared physical client if one with the same configuration exists,
+        /// otherwise creates a new one. Must be called within <see cref="_lock"/>.
         /// </summary>
-        private bool RemoveClientInternal(string name)
+        private IFastDFSClient GetOrCreateSharedClient(string name, FastDFSConfiguration configuration)
         {
-            bool removed = false;
+            var configKey = ComputeConfigKey(configuration);
 
-            // Remove client
-            if (_clients.TryGetValue(name, out var client))
+            if (_sharedClients.TryGetValue(configKey, out var existing))
             {
-                _clients.Remove(name);
-
-                try
-                {
-                    if (client is IDisposable disposableClient)
-                        disposableClient.Dispose();
-                }
-                catch
-                {
-                    // Suppress exceptions during disposal
-                }
-
-                removed = true;
+                _nameToConfigKey[name] = configKey;
+                _sharedRefCounts[configKey]++;
+                return existing;
             }
 
-            // Remove configuration
-            _options.Remove(name);
-
-            return removed;
+            var client = FastDFSClientBuilder.CreateClient(configuration, name);
+            _sharedClients[configKey] = client;
+            _sharedRefCounts[configKey] = 1;
+            _nameToConfigKey[name] = configKey;
+            return client;
         }
 
         /// <summary>
-        /// Throws ObjectDisposedException if the manager has been disposed.
+        /// Removes a client by name and decrements the shared ref count,
+        /// disposing the physical client only when the last reference is removed.
+        /// Must be called within <see cref="_lock"/>.
         /// </summary>
+        private bool RemoveClientInternal(string name)
+        {
+            if (!_clients.ContainsKey(name))
+                return false;
+
+            _clients.Remove(name);
+            _options.Remove(name);
+
+            if (_nameToConfigKey.TryGetValue(name, out var configKey))
+            {
+                _nameToConfigKey.Remove(name);
+
+                var refCount = --_sharedRefCounts[configKey];
+                if (refCount <= 0)
+                {
+                    _sharedRefCounts.Remove(configKey);
+
+                    if (_sharedClients.TryGetValue(configKey, out var client))
+                    {
+                        _sharedClients.Remove(configKey);
+                        try { (client as IDisposable)?.Dispose(); }
+                        catch { }
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Computes a fingerprint string that uniquely identifies a configuration.
+        /// Two configurations that produce the same key will share a physical client.
+        /// </summary>
+        private static string ComputeConfigKey(FastDFSConfiguration config)
+        {
+            var trackers = string.Join(",", config.TrackerServers
+                .Select(s => s.Trim().ToLowerInvariant())
+                .OrderBy(s => s));
+
+            var pool = config.ConnectionPool;
+            var sb = new StringBuilder()
+                .Append(trackers).Append('|')
+                .Append(pool.MaxConnectionPerServer).Append(',')
+                .Append(pool.MinConnectionPerServer).Append(',')
+                .Append(pool.ConnectionTimeout).Append(',')
+                .Append(pool.SendTimeout).Append(',')
+                .Append(pool.ReceiveTimeout).Append(',')
+                .Append(pool.ConnectionIdleTimeout).Append(',')
+                .Append(pool.ConnectionLifetime).Append('|')
+                .Append(config.NetworkTimeout).Append('|')
+                .Append(config.Charset ?? string.Empty).Append('|')
+                .Append(config.DefaultGroupName ?? string.Empty).Append('|')
+                .Append((int)config.StorageSelectionStrategy);
+
+            if (config.HttpConfig != null)
+            {
+                var urls = string.Join(",", config.HttpConfig.ServerUrls
+                    .OrderBy(kvp => kvp.Key)
+                    .Select(kvp => $"{kvp.Key}={kvp.Value}"));
+                sb.Append('|')
+                  .Append(urls).Append('|')
+                  .Append(config.HttpConfig.SecretKey ?? string.Empty).Append('|')
+                  .Append(config.HttpConfig.AntiStealTokenEnabled).Append('|')
+                  .Append(config.HttpConfig.DefaultTokenExpireSeconds).Append('|')
+                  .Append(config.HttpConfig.DefaultServerUrlTemplate ?? string.Empty);
+            }
+
+            return sb.ToString();
+        }
+
         private void ThrowIfDisposed()
         {
             if (_disposed)
@@ -313,19 +342,15 @@ namespace FastDFS.Client
 
             lock (_lock)
             {
-                foreach (var client in _clients.Values)
+                foreach (var client in _sharedClients.Values)
                 {
-                    try
-                    {
-                        if (client is IDisposable disposableClient)
-                            disposableClient.Dispose();
-                    }
-                    catch
-                    {
-                        // Suppress exceptions during disposal
-                    }
+                    try { (client as IDisposable)?.Dispose(); }
+                    catch { }
                 }
 
+                _sharedClients.Clear();
+                _sharedRefCounts.Clear();
+                _nameToConfigKey.Clear();
                 _clients.Clear();
                 _options.Clear();
             }
