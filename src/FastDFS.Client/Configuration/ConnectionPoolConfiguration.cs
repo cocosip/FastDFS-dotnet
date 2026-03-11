@@ -50,6 +50,12 @@ namespace FastDFS.Client.Configuration
         public int ReceiveTimeout { get; set; } = 30000;
 
         /// <summary>
+        /// Gets or sets the buffer size used for stream copy operations.
+        /// Default is 81920 bytes (80KB).
+        /// </summary>
+        public int StreamCopyBufferSize { get; set; } = 81920;
+
+        /// <summary>
         /// Validates the configuration options.
         /// </summary>
         /// <exception cref="System.ArgumentException">Thrown when configuration is invalid.</exception>
@@ -78,6 +84,9 @@ namespace FastDFS.Client.Configuration
 
             if (ReceiveTimeout <= 0)
                 throw new System.ArgumentException("ReceiveTimeout must be greater than 0.", nameof(ReceiveTimeout));
+
+            if (StreamCopyBufferSize <= 0)
+                throw new System.ArgumentException("StreamCopyBufferSize must be greater than 0.", nameof(StreamCopyBufferSize));
         }
     }
 }

@@ -28,6 +28,7 @@ namespace FastDFS.Client
         private readonly StorageSelectionStrategy _selectionStrategy;
         private readonly IStorageSelector? _storageSelector;
         private readonly HttpConfiguration? _httpConfig;
+        private readonly int _streamCopyBufferSize;
         private bool _disposed;
 
         /// <summary>
@@ -41,6 +42,15 @@ namespace FastDFS.Client
         /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
         /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
         /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
+        /// <param name="trackerClient">The tracker client for querying storage servers.</param>
+        /// <param name="storageClient">The storage client for executing storage operations.</param>
+        /// <param name="name">The name of this client instance (for multi-cluster scenarios).</param>
+        /// <param name="defaultGroupName">The default storage group name to use when not specified.</param>
+        /// <param name="selectionStrategy">The storage selection strategy for client-side load balancing.</param>
+        /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
+        /// <param name="streamCopyBufferSize">Optional buffer size for stream copy operations. If null, uses default 81920 bytes.</param>
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
         public FastDFSClient(
             ITrackerClient trackerClient,
             IStorageClient storageClient,
@@ -48,6 +58,7 @@ namespace FastDFS.Client
             string? defaultGroupName = null,
             StorageSelectionStrategy selectionStrategy = StorageSelectionStrategy.TrackerSelection,
             HttpConfiguration? httpConfig = null,
+            int? streamCopyBufferSize = null,
             ILoggerFactory? loggerFactory = null)
         {
             _trackerClient = trackerClient ?? throw new ArgumentNullException(nameof(trackerClient));
@@ -57,6 +68,7 @@ namespace FastDFS.Client
             _defaultGroupName = defaultGroupName;
             _selectionStrategy = selectionStrategy;
             _httpConfig = httpConfig;
+            _streamCopyBufferSize = streamCopyBufferSize ?? 81920;
 
             _storageSelector = selectionStrategy switch
             {
@@ -178,7 +190,7 @@ namespace FastDFS.Client
                 throw new ArgumentException("Stream must be readable.", nameof(stream));
 
             using var memoryStream = new MemoryStream();
-            await stream.CopyToAsync(memoryStream, 81920, cancellationToken).ConfigureAwait(false);
+            await stream.CopyToAsync(memoryStream, _streamCopyBufferSize, cancellationToken).ConfigureAwait(false);
             return await UploadAsync(groupName, memoryStream.ToArray(), fileExtension, cancellationToken).ConfigureAwait(false);
         }
 
@@ -209,7 +221,7 @@ namespace FastDFS.Client
             using (var fileStream = File.OpenRead(localFilePath))
             using (var memoryStream = new MemoryStream())
             {
-                await fileStream.CopyToAsync(memoryStream, 81920, cancellationToken).ConfigureAwait(false);
+                await fileStream.CopyToAsync(memoryStream, _streamCopyBufferSize, cancellationToken).ConfigureAwait(false);
                 content = memoryStream.ToArray();
             }
 

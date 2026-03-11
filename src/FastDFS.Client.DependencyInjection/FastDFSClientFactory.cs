@@ -195,6 +195,7 @@ namespace FastDFS.Client.DependencyInjection
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
                 configuration.HttpConfig,
+                configuration.ConnectionPool.StreamCopyBufferSize,
                 _loggerFactory);
 
             _sharedClients[configKey] = client;

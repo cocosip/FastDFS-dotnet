@@ -471,6 +471,44 @@ namespace FastDFS.Client.Connection
         }
 
         /// <summary>
+        /// Asynchronously disposes the connection and releases resources.
+        /// </summary>
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            try
+            {
+                // Gracefully shutdown and close the socket
+                if (_socket != null)
+                {
+                    if (_socket.Connected)
+                    {
+                        try
+                        {
+                            _socket.Shutdown(SocketShutdown.Both);
+                        }
+                        catch
+                        {
+                            // Ignore shutdown errors
+                        }
+                    }
+                    _socket.Close();
+                    _socket.Dispose();
+                }
+            }
+            catch
+            {
+                // Suppress exceptions during disposal
+            }
+
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
         /// Returns a string representation of the connection.
         /// </summary>
         public override string ToString()

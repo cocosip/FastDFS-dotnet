@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Connection;
 using FastDFS.Client.Exceptions;
+using FastDFS.Client.Protocol;
 using FastDFS.Client.Protocol.Requests;
 using FastDFS.Client.Protocol.Responses;
 using Microsoft.Extensions.Logging;
@@ -378,6 +379,14 @@ namespace FastDFS.Client.Tracker
                 {
                     // Timeout - try next tracker
                     _logger.LogWarning(ex, "Timeout on tracker {Tracker}, attempting failover (attempt {Attempt}/{MaxAttempts})",
+                        endpoint.Key, attempts + 1, maxAttempts);
+                    lastException = ex;
+                    attempts++;
+                }
+                catch (FastDFSProtocolException ex) when (ex.ErrorCode.HasValue && (ex.ErrorCode.Value == (byte)FastDFSErrorCode.ConnectionRefused || ex.ErrorCode.Value == (byte)FastDFSErrorCode.NetworkUnreachable))
+                {
+                    // Connection-related protocol errors - try next tracker
+                    _logger.LogWarning(ex, "Connection error on tracker {Tracker}, attempting failover (attempt {Attempt}/{MaxAttempts})",
                         endpoint.Key, attempts + 1, maxAttempts);
                     lastException = ex;
                     attempts++;

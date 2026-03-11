@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -35,7 +36,8 @@ namespace FastDFS.Client
                 name,
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
-                configuration.HttpConfig);
+                configuration.HttpConfig,
+                configuration.ConnectionPool.StreamCopyBufferSize);
         }
 
         /// <summary>
@@ -82,15 +84,15 @@ namespace FastDFS.Client
     public class FastDFSClientManager : IFastDFSClientFactory, IDisposable
     {
         // name -> config (for lazy creation via AddClient)
-        private readonly Dictionary<string, FastDFSConfiguration> _options = new();
+        private readonly ConcurrentDictionary<string, FastDFSConfiguration> _options = new();
 
         // name -> client instance (multiple names may point to the same physical instance)
-        private readonly Dictionary<string, IFastDFSClient> _clients = new();
+        private readonly ConcurrentDictionary<string, IFastDFSClient> _clients = new();
 
-        // Shared physical clients keyed by config fingerprint (all protected by _lock)
-        private readonly Dictionary<string, IFastDFSClient> _sharedClients = new();
-        private readonly Dictionary<string, int> _sharedRefCounts = new();
-        private readonly Dictionary<string, string> _nameToConfigKey = new();
+        // Shared physical clients keyed by config fingerprint
+        private readonly ConcurrentDictionary<string, IFastDFSClient> _sharedClients = new();
+        private readonly ConcurrentDictionary<string, int> _sharedRefCounts = new();
+        private readonly ConcurrentDictionary<string, string> _nameToConfigKey = new();
 
         private readonly object _lock = new object();
         private int _disposed; // 0 = false, 1 = true; use Interlocked for thread-safe dispose
@@ -153,9 +155,15 @@ namespace FastDFS.Client
 
             ThrowIfDisposed();
 
+            // Fast path: try to get existing client without lock
+            if (_clients.TryGetValue(name, out var existingClient))
+                return existingClient;
+
+            // Slow path: create new client with lock
             lock (_lock)
             {
-                if (_clients.TryGetValue(name, out var existingClient))
+                // Double-check after acquiring lock
+                if (_clients.TryGetValue(name, out existingClient))
                     return existingClient;
 
                 if (!_options.TryGetValue(name, out var options))
@@ -261,27 +269,25 @@ namespace FastDFS.Client
         /// </summary>
         private bool RemoveClientInternal(string name)
         {
-            if (!_clients.ContainsKey(name))
+            if (!_clients.TryRemove(name, out _))
                 return false;
 
-            _clients.Remove(name);
-            _options.Remove(name);
+            _options.TryRemove(name, out _);
 
-            if (_nameToConfigKey.TryGetValue(name, out var configKey))
+            if (_nameToConfigKey.TryRemove(name, out var configKey))
             {
-                _nameToConfigKey.Remove(name);
-
-                var refCount = --_sharedRefCounts[configKey];
-                if (refCount <= 0)
+                if (_sharedRefCounts.TryRemove(configKey, out var refCount) && refCount <= 1)
                 {
-                    _sharedRefCounts.Remove(configKey);
-
-                    if (_sharedClients.TryGetValue(configKey, out var client))
+                    if (_sharedClients.TryRemove(configKey, out var client))
                     {
-                        _sharedClients.Remove(configKey);
                         try { (client as IDisposable)?.Dispose(); }
                         catch { }
                     }
+                }
+                else if (refCount > 1)
+                {
+                    // Decrement ref count
+                    _sharedRefCounts[configKey] = refCount - 1;
                 }
             }
 
