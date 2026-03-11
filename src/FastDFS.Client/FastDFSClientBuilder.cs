@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Storage;
 using FastDFS.Client.Tracker;
 
 namespace FastDFS.Client
@@ -26,10 +27,11 @@ namespace FastDFS.Client
 
             var trackerEndpoints = configuration.TrackerServers.ToList();
             var trackerClient = new TrackerClient(trackerEndpoints, configuration.ConnectionPool);
+            var storageClient = new StorageClient(configuration.ConnectionPool);
 
             return new FastDFSClient(
                 trackerClient,
-                configuration.ConnectionPool,
+                storageClient,
                 name,
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,

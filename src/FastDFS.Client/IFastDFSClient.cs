@@ -13,12 +13,22 @@ namespace FastDFS.Client
     /// This is the main entry point for interacting with FastDFS.
     /// Automatically handles tracker queries and storage operations.
     /// </summary>
-    public interface IFastDFSClient
+    public interface IFastDFSClient : IDisposable
     {
         /// <summary>
         /// Gets the name of this client instance (for multi-cluster scenarios).
         /// </summary>
         string Name { get; }
+
+        /// <summary>
+        /// Gets the underlying tracker client for advanced low-level tracker operations.
+        /// </summary>
+        Tracker.ITrackerClient TrackerClient { get; }
+
+        /// <summary>
+        /// Gets the underlying storage client for advanced low-level storage operations.
+        /// </summary>
+        Storage.IStorageClient StorageClient { get; }
 
         // ==================== Upload Operations ====================
 

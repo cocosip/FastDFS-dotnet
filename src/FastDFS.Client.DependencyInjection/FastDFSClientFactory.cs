@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Storage;
 using FastDFS.Client.Tracker;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,7 +29,6 @@ namespace FastDFS.Client.DependencyInjection
 
         // Shared physical clients keyed by config fingerprint (protected by _lock)
         private readonly Dictionary<string, IFastDFSClient> _sharedClients = new();
-        private readonly Dictionary<string, ITrackerClient> _sharedTrackerClients = new();
         private readonly Dictionary<string, int> _sharedRefCounts = new();
         private readonly Dictionary<string, string> _nameToConfigKey = new();
 
@@ -186,10 +186,11 @@ namespace FastDFS.Client.DependencyInjection
             }
 
             // Create new physical client
-            var trackerClient = CreateTrackerClient(name, configuration);
+            var trackerClient = new TrackerClient(configuration.TrackerServers, configuration.ConnectionPool, _loggerFactory);
+            var storageClient = new StorageClient(configuration.ConnectionPool, _loggerFactory);
             var client = new FastDFSClient(
                 trackerClient,
-                configuration.ConnectionPool,
+                storageClient,
                 name,
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
@@ -197,7 +198,6 @@ namespace FastDFS.Client.DependencyInjection
                 _loggerFactory);
 
             _sharedClients[configKey] = client;
-            _sharedTrackerClients[configKey] = trackerClient;
             _sharedRefCounts[configKey] = 1;
             _nameToConfigKey[name] = configKey;
 
@@ -242,19 +242,6 @@ namespace FastDFS.Client.DependencyInjection
                         }
                     }
 
-                    if (_sharedTrackerClients.TryGetValue(configKey, out var sharedTracker))
-                    {
-                        _sharedTrackerClients.Remove(configKey);
-                        try
-                        {
-                            (sharedTracker as IDisposable)?.Dispose();
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "Error disposing shared TrackerClient for '{ClientName}'", name);
-                        }
-                    }
-
                     _logger.LogDebug("Physical client disposed — last reference removed");
                 }
                 else
@@ -267,12 +254,6 @@ namespace FastDFS.Client.DependencyInjection
 
             _runtimeConfigurations.TryRemove(name, out _);
             return true;
-        }
-
-        private ITrackerClient CreateTrackerClient(string name, FastDFSConfiguration configuration)
-        {
-            var trackerEndpoints = configuration.TrackerServers.ToList();
-            return new TrackerClient(trackerEndpoints, configuration.ConnectionPool, _loggerFactory);
         }
 
         private void ThrowIfDisposed()
@@ -308,21 +289,7 @@ namespace FastDFS.Client.DependencyInjection
                     }
                 }
 
-                foreach (var kvp in _sharedTrackerClients)
-                {
-                    try
-                    {
-                        _logger.LogDebug("Disposing shared TrackerClient '{Key}'", kvp.Key);
-                        (kvp.Value as IDisposable)?.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error disposing shared TrackerClient '{Key}'", kvp.Key);
-                    }
-                }
-
                 _sharedClients.Clear();
-                _sharedTrackerClients.Clear();
                 _sharedRefCounts.Clear();
                 _nameToConfigKey.Clear();
             }

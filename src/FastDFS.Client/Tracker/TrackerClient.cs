@@ -88,11 +88,15 @@ namespace FastDFS.Client.Tracker
         }
 
         /// <summary>
-        /// Queries a Storage server for uploading files.
+        /// Queries a storage server for uploading files.
+        /// The tracker selects an available storage server based on server-side load balancing.
         /// </summary>
         /// <param name="groupName">The storage group name. If null or empty, the tracker will select a group automatically.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Storage server information for upload.</returns>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A <see cref="StorageServerInfo"/> object containing the storage server information for upload.</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the tracker client has been disposed.</exception>
+        /// <exception cref="FastDFSException">Thrown when the query operation fails.</exception>
+        /// <exception cref="FastDFSProtocolException">Thrown when the tracker returns empty storage server info.</exception>
         public async Task<StorageServerInfo> QueryStorageForUploadAsync(string? groupName = null, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -133,12 +137,17 @@ namespace FastDFS.Client.Tracker
         }
 
         /// <summary>
-        /// Queries a Storage server for downloading a file.
+        /// Queries a storage server for downloading a file.
+        /// The tracker selects an available storage server that has the file.
         /// </summary>
-        /// <param name="groupName">The storage group name.</param>
-        /// <param name="fileName">The file name (path on storage server).</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Storage server information for download.</returns>
+        /// <param name="groupName">The storage group name where the file is located.</param>
+        /// <param name="fileName">The file name (path on the storage server).</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A <see cref="StorageServerInfo"/> object containing the storage server information for download.</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the tracker client has been disposed.</exception>
+        /// <exception cref="ArgumentException">Thrown when groupName or fileName is null or empty.</exception>
+        /// <exception cref="FastDFSException">Thrown when the query operation fails.</exception>
+        /// <exception cref="FastDFSProtocolException">Thrown when the tracker returns empty storage server info.</exception>
         public async Task<StorageServerInfo> QueryStorageForDownloadAsync(string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -174,12 +183,16 @@ namespace FastDFS.Client.Tracker
         }
 
         /// <summary>
-        /// Queries a Storage server for updating a file (delete, set metadata, etc.).
+        /// Queries a storage server for updating a file (delete, set metadata, etc.).
         /// </summary>
-        /// <param name="groupName">The storage group name.</param>
-        /// <param name="fileName">The file name (path on storage server).</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>Storage server information for update.</returns>
+        /// <param name="groupName">The storage group name where the file is located.</param>
+        /// <param name="fileName">The file name (path on the storage server).</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A <see cref="StorageServerInfo"/> object containing the storage server information for update.</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the tracker client has been disposed.</exception>
+        /// <exception cref="ArgumentException">Thrown when groupName or fileName is null or empty.</exception>
+        /// <exception cref="FastDFSException">Thrown when the query operation fails.</exception>
+        /// <exception cref="FastDFSProtocolException">Thrown when the tracker returns empty storage server info.</exception>
         public async Task<StorageServerInfo> QueryStorageForUpdateAsync(string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -215,11 +228,15 @@ namespace FastDFS.Client.Tracker
         }
 
         /// <summary>
-        /// Queries all available Storage servers for uploading files.
+        /// Queries all available storage servers for uploading files.
+        /// This allows client-side load balancing and storage selection strategies.
         /// </summary>
         /// <param name="groupName">The storage group name. If null or empty, the tracker will select a group automatically.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>List of all available storage servers for upload.</returns>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A list of <see cref="StorageServerInfo"/> objects containing all available storage servers for upload.</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the tracker client has been disposed.</exception>
+        /// <exception cref="FastDFSException">Thrown when the query operation fails.</exception>
+        /// <exception cref="FastDFSProtocolException">Thrown when the tracker returns no available storage servers.</exception>
         public async Task<List<StorageServerInfo>> QueryAllStoragesForUploadAsync(string? groupName = null, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -258,12 +275,18 @@ namespace FastDFS.Client.Tracker
         }
 
         /// <summary>
-        /// Queries all Storage servers for downloading a file.
+        /// Queries all storage servers for downloading a file.
+        /// Returns all storage servers that have the file, allowing client-side selection based on
+        /// network latency, geographic location, or other criteria.
         /// </summary>
-        /// <param name="groupName">The storage group name.</param>
-        /// <param name="fileName">The file name (path on storage server).</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>List of all storage servers that have the file.</returns>
+        /// <param name="groupName">The storage group name where the file is located.</param>
+        /// <param name="fileName">The file name (path on the storage server).</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A list of <see cref="StorageServerInfo"/> objects containing all storage servers that have the file.</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the tracker client has been disposed.</exception>
+        /// <exception cref="ArgumentException">Thrown when groupName or fileName is null or empty.</exception>
+        /// <exception cref="FastDFSException">Thrown when the query operation fails.</exception>
+        /// <exception cref="FastDFSProtocolException">Thrown when the tracker returns no available storage servers for the file.</exception>
         public async Task<List<StorageServerInfo>> QueryAllStoragesForDownloadAsync(string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             if (_disposed)
@@ -377,7 +400,13 @@ namespace FastDFS.Client.Tracker
 
         // ==================== Management Operations ====================
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Lists all storage groups in the FastDFS cluster.
+        /// This is a management operation used for monitoring and cluster administration.
+        /// </summary>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A list of <see cref="GroupInfo"/> objects containing information about all storage groups.</returns>
+        /// <exception cref="FastDFSException">Thrown when the list operation fails.</exception>
         public async Task<List<GroupInfo>> ListAllGroupsAsync(CancellationToken cancellationToken = default)
         {
             var request = new ListAllGroupsRequest();
@@ -397,7 +426,15 @@ namespace FastDFS.Client.Tracker
             return response.Groups;
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        /// Lists all storage servers in a specific group.
+        /// This is a management operation used for monitoring and cluster administration.
+        /// </summary>
+        /// <param name="groupName">The storage group name to query.</param>
+        /// <param name="storageServerId">Optional: specific storage server ID (IP address) to query. If null, returns all servers in the group.</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>A list of <see cref="StorageServerDetail"/> objects containing detailed information about storage servers in the group.</returns>
+        /// <exception cref="FastDFSException">Thrown when the list operation fails.</exception>
         public async Task<List<StorageServerDetail>> ListStorageServersAsync(string groupName, string? storageServerId = null, CancellationToken cancellationToken = default)
         {
             var request = new ListStorageServersRequest

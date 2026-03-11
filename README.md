@@ -18,8 +18,24 @@ A modern, high-performance FastDFS .NET client library with built-in connection 
 - ✅ **Non-DI Support**: Factory pattern for non-DI scenarios
 - ✅ **Logging Integration**: Built-in logging with `Microsoft.Extensions.Logging`
 - ✅ **Automatic Failover**: Tracker server failover support
+- ✅ **Low-Level Access**: Direct access to `ITrackerClient` and `IStorageClient` for advanced use cases
 - ✅ **Zero Dependencies**: Core library has no external dependencies
 - ✅ **Comprehensive Tests**: 86+ unit tests with 100% pass rate
+
+## Architecture
+
+The SDK is structured in three clear layers:
+
+```
+IFastDFSClient (Coordination Layer)
+  ├── ITrackerClient  — Queries tracker servers to locate storage nodes
+  └── IStorageClient  — Executes protocol commands against storage servers
+                         and manages per-node connection pools
+```
+
+- **`IFastDFSClient`** — Main API. Coordinates tracker queries and storage operations. This is what you inject and use day-to-day.
+- **`ITrackerClient`** — Communicates with tracker servers to resolve storage node addresses. Handles automatic failover across multiple trackers.
+- **`IStorageClient`** — Executes FastDFS binary protocol commands against a specific storage server. Manages a dynamic connection pool per storage node.
 
 ## Quick Start
 
@@ -27,6 +43,7 @@ A modern, high-performance FastDFS .NET client library with built-in connection 
 
 ```bash
 dotnet add package FastDFS.Client
+dotnet add package FastDFS.Client.DependencyInjection  # for DI support
 ```
 
 ### Basic Usage (Dependency Injection)
@@ -34,7 +51,7 @@ dotnet add package FastDFS.Client
 **Single Cluster:**
 
 ```csharp
-// Startup.cs or Program.cs
+// Program.cs
 services.AddFastDFS(options =>
 {
     options.TrackerServers = new[] { "192.168.1.100:22122" };
@@ -58,7 +75,7 @@ public class FileService
     public async Task<string> UploadFile(byte[] content, string extension)
     {
         // Upload returns file ID like: group1/M00/00/00/wKgBaGVlYWRlYS5qcGc
-        return await _client.UploadAsync(null, content, extension, CancellationToken.None);
+        return await _client.UploadAsync(null, content, extension);
     }
 }
 ```
@@ -86,7 +103,7 @@ public class FileService
     public FileService(IFastDFSClientFactory factory)
     {
         _defaultClient = factory.GetClient("default");
-        _backupClient = factory.GetClient("backup");
+        _backupClient  = factory.GetClient("backup");
     }
 }
 ```
@@ -157,30 +174,30 @@ services.AddFastDFS(configuration.GetSection("FastDFS"));
 
 ### Non-DI Usage
 
+`IFastDFSClient` implements `IDisposable`. Always dispose the client (or use `using`) to release TCP connections cleanly.
+
+**Single client:**
+
 ```csharp
 var options = new FastDFSConfiguration
 {
     TrackerServers = new[] { "192.168.1.100:22122" }
 };
 
-var client = FastDFSClientBuilder.CreateClient(options);
+using var client = FastDFSClientBuilder.CreateClient(options);
 
-// Upload file (groupName can be null for auto-select)
-var fileId = await client.UploadAsync(null, fileBytes, "jpg", CancellationToken.None);
-
-// Download file
-var content = await client.DownloadAsync(fileId, CancellationToken.None);
-
-// Delete file
-await client.DeleteAsync(fileId, CancellationToken.None);
+var fileId = await client.UploadAsync(null, fileBytes, "jpg");
+var content = await client.DownloadAsync(fileId);
+await client.DeleteAsync(fileId);
 ```
 
 **Multiple Clusters (Non-DI):**
 
-```csharp
-var manager = new FastDFSClientManager();
+Use `FastDFSClientManager` for multi-cluster scenarios — it owns and disposes all clients.
 
-// Add client configurations
+```csharp
+using var manager = new FastDFSClientManager();
+
 manager.AddClient("default", new FastDFSConfiguration
 {
     TrackerServers = new[] { "192.168.1.100:22122" }
@@ -191,15 +208,8 @@ manager.AddClient("backup", new FastDFSConfiguration
     TrackerServers = new[] { "192.168.2.100:22122" }
 });
 
-// Get clients
 var defaultClient = manager.GetClient("default");
-var backupClient = manager.GetClient("backup");
-
-// Check if client exists
-if (manager.HasClient("cdn"))
-{
-    var cdnClient = manager.GetClient("cdn");
-}
+var backupClient  = manager.GetClient("backup");
 
 // Register client dynamically
 manager.RegisterClient("new-cluster", new FastDFSConfiguration
@@ -210,8 +220,7 @@ manager.RegisterClient("new-cluster", new FastDFSConfiguration
 // Remove client
 manager.RemoveClient("backup");
 
-// Dispose manager (disposes all clients)
-manager.Dispose();
+// Dispose manager → disposes all managed clients and TCP connections
 ```
 
 ## API Overview
@@ -220,53 +229,53 @@ manager.Dispose();
 
 ```csharp
 // Upload from byte array (auto-select group)
-string fileId = await client.UploadAsync(null, bytes, "jpg", CancellationToken.None);
+string fileId = await client.UploadAsync(null, bytes, "jpg");
 // Returns: "group1/M00/00/00/wKgBaGVlYWRlYS5qcGc"
 
 // Upload to specific group
-string fileId = await client.UploadAsync("group1", bytes, "jpg", CancellationToken.None);
+string fileId = await client.UploadAsync("group1", bytes, "jpg");
 
 // Upload from stream
-string fileId = await client.UploadAsync(null, stream, "pdf", CancellationToken.None);
+string fileId = await client.UploadAsync(null, stream, "pdf");
 
 // Upload from file path
-string fileId = await client.UploadFileAsync(null, "/path/to/file.png", CancellationToken.None);
+string fileId = await client.UploadFileAsync(null, "/path/to/file.png");
 
 // Upload appender file (supports append later)
-string fileId = await client.UploadAppenderFileAsync(null, bytes, "log", CancellationToken.None);
+string fileId = await client.UploadAppenderFileAsync(null, bytes, "log");
 
 // Append to appender file
-await client.AppendFileAsync(fileId, newBytes, CancellationToken.None);
+await client.AppendFileAsync(fileId, newBytes);
 ```
 
 ### Download Operations
 
 ```csharp
 // Download to byte array
-byte[] content = await client.DownloadAsync(fileId, CancellationToken.None);
+byte[] content = await client.DownloadAsync(fileId);
 
 // Download to stream
-await client.DownloadAsync(fileId, outputStream, CancellationToken.None);
+await client.DownloadAsync(fileId, outputStream);
 
 // Download to file
-await client.DownloadFileAsync(fileId, "/save/path.jpg", CancellationToken.None);
+await client.DownloadFileAsync(fileId, "/save/path.jpg");
 
 // Partial download (offset and length)
-byte[] partial = await client.DownloadAsync(fileId, 1024, 2048, CancellationToken.None);
+byte[] partial = await client.DownloadAsync(fileId, offset: 1024, length: 2048);
 ```
 
 ### File Management
 
 ```csharp
 // Query file info
-FastDFSFileInfo info = await client.QueryFileInfoAsync(fileId, CancellationToken.None);
+FastDFSFileInfo info = await client.QueryFileInfoAsync(fileId);
 Console.WriteLine($"Size: {info.FileSize}, CRC32: {info.Crc32}");
 
 // Check if file exists
-bool exists = await client.FileExistsAsync(fileId, CancellationToken.None);
+bool exists = await client.FileExistsAsync(fileId);
 
 // Delete file
-await client.DeleteAsync(fileId, CancellationToken.None);
+await client.DeleteAsync(fileId);
 
 // Set metadata
 var metadata = new FastDFSMetadata
@@ -276,14 +285,37 @@ var metadata = new FastDFSMetadata
     { "width", "1920" },
     { "height", "1080" }
 };
-await client.SetMetadataAsync(fileId, metadata, MetadataFlag.Overwrite, CancellationToken.None);
+await client.SetMetadataAsync(fileId, metadata, MetadataFlag.Overwrite);
 
 // Get metadata
-FastDFSMetadata metadata = await client.GetMetadataAsync(fileId, CancellationToken.None);
+FastDFSMetadata metadata = await client.GetMetadataAsync(fileId);
 string author = metadata["author"];
 ```
 
 ## Advanced Usage
+
+### Low-Level Tracker and Storage Access
+
+`IFastDFSClient` exposes `TrackerClient` and `StorageClient` for scenarios that require direct control over the underlying protocol.
+
+```csharp
+// Query the tracker directly — get storage server info for upload
+StorageServerInfo server = await client.TrackerClient.QueryStorageForUploadAsync("group1");
+
+// Execute storage operation directly against the resolved server
+string fileId = await client.StorageClient.UploadAsync(server, bytes, "jpg");
+
+// Query all available storage servers for a file (for custom selection logic)
+var servers = await client.TrackerClient.QueryAllStoragesForDownloadAsync("group1", fileName);
+
+// Execute a download against a specific server
+byte[] content = await client.StorageClient.DownloadAsync(server, "group1", fileName, offset: 0, length: 0);
+```
+
+This is useful for:
+- Custom storage server selection logic
+- Batch operations targeting a single storage node
+- Implementing custom retry or circuit-breaker policies at the protocol level
 
 ### Connection Pool Configuration
 
@@ -293,13 +325,13 @@ services.AddFastDFS(options =>
     options.TrackerServers = new[] { "192.168.1.100:22122", "192.168.1.101:22122" };
     options.ConnectionPool = new ConnectionPoolConfiguration
     {
-        MaxConnectionPerServer = 50,        // Maximum connections per server
-        MinConnectionPerServer = 5,         // Minimum connections (pre-warmed)
-        ConnectionIdleTimeout = 300,        // Idle timeout in seconds
-        ConnectionLifetime = 3600,          // Max lifetime in seconds
-        ConnectionTimeout = 30000,          // Connection timeout in ms
-        SendTimeout = 30000,                // Send timeout in ms
-        ReceiveTimeout = 30000              // Receive timeout in ms
+        MaxConnectionPerServer = 50,   // Maximum connections per server
+        MinConnectionPerServer = 5,    // Minimum connections (pre-warmed)
+        ConnectionIdleTimeout  = 300,  // Idle timeout in seconds
+        ConnectionLifetime     = 3600, // Max lifetime in seconds
+        ConnectionTimeout      = 30000, // Connection timeout in ms
+        SendTimeout            = 30000, // Send timeout in ms
+        ReceiveTimeout         = 30000  // Receive timeout in ms
     };
     options.Charset = "UTF-8";
     options.NetworkTimeout = 30;
@@ -313,8 +345,10 @@ services.AddFastDFS(options =>
 {
     options.TrackerServers = new[] { "192.168.1.100:22122" };
 
-    // Choose storage selection strategy:
-    options.StorageSelectionStrategy = StorageSelectionStrategy.TrackerSelection; // Default, let tracker decide
+    // Let the tracker decide (default, most efficient)
+    options.StorageSelectionStrategy = StorageSelectionStrategy.TrackerSelection;
+
+    // Or choose client-side strategy:
     // options.StorageSelectionStrategy = StorageSelectionStrategy.RoundRobin;
     // options.StorageSelectionStrategy = StorageSelectionStrategy.Random;
     // options.StorageSelectionStrategy = StorageSelectionStrategy.FirstAvailable;
@@ -330,23 +364,22 @@ services.AddFastDFS(options =>
 {
     options.TrackerServers = new[] { "192.168.1.100:22122" };
 
-    // Configure HTTP access
     options.HttpConfig = new HttpConfiguration
     {
-        // Option 1: Configure HTTP server URLs for each group
+        // Option 1: Configure HTTP server URLs per group
         ServerUrls = new Dictionary<string, string>
         {
             { "group1", "http://img1.example.com" },
             { "group2", "http://img2.example.com" }
         },
 
-        // Option 2: Use template with storage server IP (if not using separate HTTP domain)
-        // DefaultServerUrlTemplate = "http://{ip}:8080",  // {ip} will be replaced with storage IP
+        // Option 2: Use template with storage server IP
+        // DefaultServerUrlTemplate = "http://{ip}:8080",
 
-        // Anti-steal token configuration (optional, requires Nginx module setup)
-        AntiStealTokenEnabled = true,
-        SecretKey = "your-secret-key-here",         // Must match Nginx configuration
-        DefaultTokenExpireSeconds = 3600             // Token valid for 1 hour
+        // Anti-steal token (optional, requires Nginx module setup)
+        AntiStealTokenEnabled      = true,
+        SecretKey                  = "your-secret-key-here",
+        DefaultTokenExpireSeconds  = 3600
     };
 });
 ```
@@ -355,27 +388,21 @@ services.AddFastDFS(options =>
 
 ```csharp
 // Simple HTTP URL
-string url = await client.GetFileUrlAsync(fileId, null, CancellationToken.None);
+string url = await client.GetFileUrlAsync(fileId);
 // Result: http://img1.example.com/group1/M00/00/00/xxxxx.jpg
 
-// HTTP URL with custom download filename
-string url = await client.GetFileUrlAsync(fileId, "my-photo.jpg", CancellationToken.None);
+// With custom download filename
+string url = await client.GetFileUrlAsync(fileId, "my-photo.jpg");
 // Result: http://img1.example.com/group1/M00/00/00/xxxxx.jpg?attname=my-photo.jpg
 
-// Secure URL with anti-steal token (1 hour expiration)
-string secureUrl = await client.GetFileUrlWithTokenAsync(fileId, 3600, null, CancellationToken.None);
+// Secure URL with anti-steal token
+string secureUrl = await client.GetFileUrlWithTokenAsync(fileId, expireSeconds: 3600);
 // Result: http://img1.example.com/group1/M00/00/00/xxxxx.jpg?token=abc123&ts=1234567890
 
 // Secure URL with custom filename
-string secureUrl = await client.GetFileUrlWithTokenAsync(fileId, 3600, "photo.jpg", CancellationToken.None);
+string secureUrl = await client.GetFileUrlWithTokenAsync(fileId, 3600, "photo.jpg");
 // Result: http://img1.example.com/group1/M00/00/00/xxxxx.jpg?token=abc123&ts=1234567890&attname=photo.jpg
 ```
-
-**Usage scenarios:**
-- Generate URLs for browser direct access
-- Integrate with CDN for faster delivery
-- Secure file access with time-limited tokens
-- Custom download filenames for better user experience
 
 ### Logging Integration
 
@@ -391,7 +418,7 @@ services.AddFastDFS(options =>
     options.TrackerServers = new[] { "192.168.1.100:22122" };
 });
 
-// Logs will automatically include:
+// Logs automatically include:
 // - Connection pool events (creation, reuse, disposal)
 // - Tracker failover events
 // - Upload/download operations
@@ -403,7 +430,7 @@ services.AddFastDFS(options =>
 ```csharp
 try
 {
-    var fileId = await client.UploadAsync(null, bytes, "jpg", CancellationToken.None);
+    var fileId = await client.UploadAsync(null, bytes, "jpg");
 }
 catch (FastDFSNetworkException ex)
 {
@@ -434,33 +461,63 @@ public class RobustFileService
     public RobustFileService(IFastDFSClientFactory factory, ILogger<RobustFileService> logger)
     {
         _primaryClient = factory.GetClient("primary");
-        _backupClient = factory.GetClient("backup");
-        _logger = logger;
+        _backupClient  = factory.GetClient("backup");
+        _logger        = logger;
     }
 
     public async Task<string> UploadWithFailover(byte[] content, string extension)
     {
         try
         {
-            return await _primaryClient.UploadAsync(null, content, "jpg", CancellationToken.None);
+            return await _primaryClient.UploadAsync(null, content, extension);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Primary cluster failed, using backup");
-            return await _backupClient.UploadAsync(null, content, "jpg", CancellationToken.None);
+            _logger.LogWarning(ex, "Primary cluster failed, switching to backup");
+            return await _backupClient.UploadAsync(null, content, extension);
         }
     }
 }
 ```
 
+## Object Lifecycle
+
+### DI Scenario
+
+All clients are singletons managed by `FastDFSClientFactory`. The DI container disposes the factory (and all underlying TCP connections) when the application shuts down. No manual cleanup is needed.
+
+```
+DI Container (Singleton)
+  └── FastDFSClientFactory  ← sole lifecycle owner
+        └── FastDFSClient   ← one per named cluster
+              ├── TrackerClient → ConnectionPool(s) → TCP connections
+              └── StorageClient → ConnectionPool(s) → TCP connections (per storage node)
+```
+
+### Non-DI Scenario
+
+| Entry Point | Lifecycle management |
+|---|---|
+| `FastDFSClientBuilder.CreateClient()` | Caller owns the client — use `using` or call `Dispose()` explicitly |
+| `FastDFSClientManager` | Manager owns all clients — dispose the manager to release everything |
+
+```csharp
+// FastDFSClientBuilder — caller owns
+using var client = FastDFSClientBuilder.CreateClient(options);
+
+// FastDFSClientManager — manager owns
+using var manager = new FastDFSClientManager();
+manager.AddClient("default", options);
+var client = manager.GetClient("default"); // do NOT dispose individually
+```
+
 ## Performance Tips
 
-1. **Use Connection Pooling**: Always use the built-in connection pool instead of creating new clients for each operation
-2. **Reuse Clients**: IFastDFSClient instances are thread-safe and should be reused
-3. **Adjust Pool Size**: Tune `MaxConnectionPerServer` based on your workload
-4. **Enable Logging**: Use logging to monitor connection pool efficiency
-5. **Use Async Operations**: All operations are async - use `await` properly to avoid blocking threads
-6. **Shared Connection Pool**: Multiple named clients pointing to the same cluster automatically share a single connection pool — no extra configuration needed. This is especially useful in dynamic registration scenarios where different business entities use the same underlying FastDFS cluster.
+1. **Reuse Clients**: `IFastDFSClient` instances are thread-safe and designed for long-term reuse
+2. **Tune Pool Size**: Adjust `MaxConnectionPerServer` to match your workload concurrency
+3. **Shared Connection Pool**: Multiple named clients with identical configuration automatically share one connection pool — no extra setup needed
+4. **Use Async**: All operations are async — always `await` to avoid thread starvation
+5. **Storage Selector**: `TrackerSelection` (default) is the most efficient strategy; use client-side strategies only when you need custom routing
 
 ## Building
 
@@ -483,24 +540,22 @@ dotnet pack -c Release
 ```
 FastDFS.Client/
 ├── src/
-│   ├── FastDFS.Client/                    # Core library (zero dependencies)
-│   │   ├── Protocol/                      # FastDFS protocol implementation
-│   │   ├── Connection/                    # Socket connection and pooling
-│   │   ├── Tracker/                       # Tracker client
-│   │   ├── Storage/                       # Storage client
-│   │   ├── Configuration/                 # Configuration models
-│   │   ├── Exceptions/                    # Custom exceptions
-│   │   └── Utilities/                     # Helper utilities
-│   └── FastDFS.Client.DependencyInjection/ # DI extensions
+│   ├── FastDFS.Client/                     # Core library (zero dependencies)
+│   │   ├── Protocol/                       # FastDFS binary protocol (requests/responses)
+│   │   ├── Connection/                     # TCP connection and pooling
+│   │   ├── Tracker/                        # ITrackerClient — tracker server communication
+│   │   ├── Storage/                        # IStorageClient — storage server operations
+│   │   ├── Configuration/                  # Configuration models
+│   │   ├── Exceptions/                     # Custom exception types
+│   │   └── Utilities/                      # Helper utilities
+│   └── FastDFS.Client.DependencyInjection/ # DI extensions (AddFastDFS, IFastDFSClientFactory)
 ├── tests/
-│   └── FastDFS.Client.Tests/              # Unit tests (86+ tests)
+│   └── FastDFS.Client.Tests/               # Unit tests (86+ tests)
+├── benchmarks/
+│   └── FastDFS.Client.Benchmarks/          # BenchmarkDotNet performance tests
 └── samples/
-    └── FastDFS.Client.Samples/            # Usage examples
+    └── FastDFS.Client.Samples/             # Usage examples
 ```
-
-## Architecture
-
-See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation and development guidelines.
 
 ## Requirements
 
