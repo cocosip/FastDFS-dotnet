@@ -19,10 +19,11 @@ namespace FastDFS.Client.Connection
         private readonly ConcurrentQueue<FastDFSConnection> _idleConnections;
         private readonly SemaphoreSlim _connectionSemaphore;
         private readonly Timer _cleanupTimer;
+        private readonly CancellationTokenSource _disposeCts;
         private readonly ILogger _logger;
         private int _totalConnections;
         private int _activeConnections;
-        private bool _disposed;
+        private int _disposed; // 0 = false, 1 = true; use Interlocked for thread-safe dispose
 
         /// <summary>
         /// Gets the total number of connections (both idle and active) in the pool.
@@ -63,6 +64,7 @@ namespace FastDFS.Client.Connection
             _logger = logger ?? NullLogger<ConnectionPool>.Instance;
             _idleConnections = new ConcurrentQueue<FastDFSConnection>();
             _connectionSemaphore = new SemaphoreSlim(_options.MaxConnectionPerServer, _options.MaxConnectionPerServer);
+            _disposeCts = new CancellationTokenSource();
             _totalConnections = 0;
             _activeConnections = 0;
 
@@ -84,17 +86,17 @@ namespace FastDFS.Client.Connection
         /// <returns>A FastDFS connection.</returns>
         public async Task<FastDFSConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposed) == 1)
                 throw new ObjectDisposedException(nameof(ConnectionPool));
 
             _logger.LogDebug("Requesting connection from pool {Host}:{Port} (Total={Total}, Idle={Idle}, Active={Active})",
                 _host, _port, _totalConnections, _idleConnections.Count, _activeConnections);
 
-            // Try to get an idle connection first
+            // Try to get an idle connection first; use deep Poll check since
+            // the remote may have closed the socket while the connection was idle
             while (_idleConnections.TryDequeue(out var connection))
             {
-                // Validate the connection
-                if (IsConnectionValid(connection))
+                if (IsConnectionValid(connection, deepCheck: true))
                 {
                     Interlocked.Increment(ref _activeConnections);
                     _logger.LogDebug("Reused idle connection from pool {Host}:{Port}", _host, _port);
@@ -144,16 +146,16 @@ namespace FastDFS.Client.Connection
         /// <param name="connection">The connection to return.</param>
         public void ReturnConnection(FastDFSConnection connection)
         {
-            if (_disposed)
+            if (connection == null)
+                throw new ArgumentNullException(nameof(connection));
+
+            if (Volatile.Read(ref _disposed) == 1)
             {
                 // Pool is disposed, just dispose the connection
                 _logger.LogDebug("Pool disposed, disposing returned connection to {Host}:{Port}", _host, _port);
                 DisposeConnection(connection);
                 return;
             }
-
-            if (connection == null)
-                throw new ArgumentNullException(nameof(connection));
 
             Interlocked.Decrement(ref _activeConnections);
 
@@ -195,17 +197,19 @@ namespace FastDFS.Client.Connection
         }
 
         /// <summary>
-        /// Validates if a connection is still usable.
+        /// Validates lifetime and idle-timeout constraints of a connection.
+        /// Does NOT include a socket poll — call <paramref name="deepCheck"/> = true
+        /// only when pulling a connection from the idle queue (where the remote may
+        /// have closed the socket while it was idle).
         /// </summary>
-        /// <param name="connection">The connection to validate.</param>
-        /// <returns>True if the connection is valid; otherwise, false.</returns>
-        private bool IsConnectionValid(FastDFSConnection connection)
+        private bool IsConnectionValid(FastDFSConnection connection, bool deepCheck = false)
         {
             if (connection == null)
                 return false;
 
-            // Check if connection is alive
-            if (!connection.IsAlive)
+            // Lightweight check (just Connected flag); use Poll only for idle connections
+            bool alive = deepCheck ? connection.PollIsAlive() : connection.IsAlive;
+            if (!alive)
                 return false;
 
             var now = DateTime.UtcNow;
@@ -235,7 +239,7 @@ namespace FastDFS.Client.Connection
         /// <param name="state">Timer state (not used).</param>
         private void CleanupIdleConnections(object? state)
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposed) == 1)
                 return;
 
             try
@@ -247,28 +251,27 @@ namespace FastDFS.Client.Connection
                 _logger.LogDebug("Starting connection cleanup for {Host}:{Port} (Idle={Idle}, Total={Total})",
                     _host, _port, idleCount, _totalConnections);
 
-                // Create a temporary list to hold valid connections
-                var validConnections = new ConcurrentQueue<FastDFSConnection>();
+                // Temporary list — single-threaded timer callback, no need for ConcurrentQueue
+                var validConnections = new System.Collections.Generic.List<FastDFSConnection>(idleCount);
 
                 // Process all idle connections
                 while (_idleConnections.TryDequeue(out var connection))
                 {
                     bool shouldKeep = false;
 
-                    // Always keep minimum number of connections if they're valid
-                    if (validConnections.Count < minToKeep && connection.IsAlive)
+                    // Cleanup runs in a timer — use deep Poll check for all idle connections
+                    if (validConnections.Count < minToKeep && connection.PollIsAlive())
                     {
                         shouldKeep = true;
                     }
-                    // For connections beyond minimum, check if they're still valid
-                    else if (IsConnectionValid(connection))
+                    else if (IsConnectionValid(connection, deepCheck: true))
                     {
                         shouldKeep = true;
                     }
 
                     if (shouldKeep)
                     {
-                        validConnections.Enqueue(connection);
+                        validConnections.Add(connection);
                     }
                     else
                     {
@@ -279,7 +282,7 @@ namespace FastDFS.Client.Connection
                 }
 
                 // Put valid connections back to the pool
-                while (validConnections.TryDequeue(out var connection))
+                foreach (var connection in validConnections)
                 {
                     _idleConnections.Enqueue(connection);
                 }
@@ -298,18 +301,21 @@ namespace FastDFS.Client.Connection
                     _logger.LogInformation("Prewarming connection pool {Host}:{Port}, creating {Count} connections to reach minimum",
                         _host, _port, toCreate);
 
+                    var ct = _disposeCts.Token;
                     _ = Task.Run(async () =>
                     {
                         for (int i = 0; i < toCreate; i++)
                         {
+                            if (ct.IsCancellationRequested)
+                                break;
                             try
                             {
-                                bool acquired = await _connectionSemaphore.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                                bool acquired = await _connectionSemaphore.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
                                 if (acquired)
                                 {
                                     try
                                     {
-                                        var connection = await CreateConnectionAsync(CancellationToken.None).ConfigureAwait(false);
+                                        var connection = await CreateConnectionAsync(ct).ConfigureAwait(false);
                                         _idleConnections.Enqueue(connection);
                                         _logger.LogDebug("Prewarmed connection {Index}/{Total} to {Host}:{Port}",
                                             i + 1, toCreate, _host, _port);
@@ -322,13 +328,17 @@ namespace FastDFS.Client.Connection
                                     }
                                 }
                             }
+                            catch (OperationCanceledException)
+                            {
+                                break;
+                            }
                             catch (Exception ex)
                             {
                                 _logger.LogWarning(ex, "Failed to acquire semaphore for prewarming connection to {Host}:{Port}",
                                     _host, _port);
                             }
                         }
-                    });
+                    }, ct);
                 }
             }
             catch (Exception ex)
@@ -363,15 +373,15 @@ namespace FastDFS.Client.Connection
         /// </summary>
         public void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
                 return;
-
-            _disposed = true;
 
             _logger.LogInformation("Disposing ConnectionPool for {Host}:{Port} (Total={Total}, Idle={Idle}, Active={Active})",
                 _host, _port, _totalConnections, _idleConnections.Count, _activeConnections);
 
-            // Stop the cleanup timer
+            // Cancel any in-flight prewarm tasks and stop the cleanup timer
+            _disposeCts.Cancel();
+            _disposeCts.Dispose();
             _cleanupTimer?.Dispose();
 
             // Dispose all idle connections

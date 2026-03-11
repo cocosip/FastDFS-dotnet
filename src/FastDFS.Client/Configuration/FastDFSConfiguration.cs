@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using FastDFS.Client.Storage;
 
 namespace FastDFS.Client.Configuration
@@ -93,6 +95,47 @@ namespace FastDFS.Client.Configuration
 
             // Validate HTTP configuration if provided
             HttpConfig?.Validate();
+        }
+
+        /// <summary>
+        /// Computes a fingerprint string that uniquely identifies this configuration.
+        /// Two configurations that produce the same key will share a physical client in the factory.
+        /// </summary>
+        public string GetConfigKey()
+        {
+            var trackers = string.Join(",", TrackerServers
+                .Select(s => s.Trim().ToLowerInvariant())
+                .OrderBy(s => s));
+
+            var pool = ConnectionPool;
+            var sb = new StringBuilder()
+                .Append(trackers).Append('|')
+                .Append(pool.MaxConnectionPerServer).Append(',')
+                .Append(pool.MinConnectionPerServer).Append(',')
+                .Append(pool.ConnectionTimeout).Append(',')
+                .Append(pool.SendTimeout).Append(',')
+                .Append(pool.ReceiveTimeout).Append(',')
+                .Append(pool.ConnectionIdleTimeout).Append(',')
+                .Append(pool.ConnectionLifetime).Append('|')
+                .Append(NetworkTimeout).Append('|')
+                .Append(Charset ?? string.Empty).Append('|')
+                .Append(DefaultGroupName ?? string.Empty).Append('|')
+                .Append((int)StorageSelectionStrategy);
+
+            if (HttpConfig != null)
+            {
+                var urls = string.Join(",", HttpConfig.ServerUrls
+                    .OrderBy(kvp => kvp.Key)
+                    .Select(kvp => $"{kvp.Key}={kvp.Value}"));
+                sb.Append('|')
+                  .Append(urls).Append('|')
+                  .Append(HttpConfig.SecretKey ?? string.Empty).Append('|')
+                  .Append(HttpConfig.AntiStealTokenEnabled).Append('|')
+                  .Append(HttpConfig.DefaultTokenExpireSeconds).Append('|')
+                  .Append(HttpConfig.DefaultServerUrlTemplate ?? string.Empty);
+            }
+
+            return sb.ToString();
         }
 
         /// <summary>

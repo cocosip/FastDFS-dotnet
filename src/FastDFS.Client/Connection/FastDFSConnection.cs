@@ -18,6 +18,9 @@ namespace FastDFS.Client.Connection
     /// </summary>
     public class FastDFSConnection : IDisposable
     {
+        // Shared round-robin counter for DNS multi-IP load distribution
+        private static int _dnsRoundRobinIndex;
+
         private Socket? _socket;
         private readonly string _host;
         private readonly int _port;
@@ -29,7 +32,7 @@ namespace FastDFS.Client.Connection
         /// <summary>
         /// Gets the remote endpoint in the format "host:port".
         /// </summary>
-        public string RemoteEndpoint => $"{_host}:{_port}";
+        public string RemoteEndpoint { get; }
 
         /// <summary>
         /// Gets the time when this connection was created.
@@ -43,6 +46,8 @@ namespace FastDFS.Client.Connection
 
         /// <summary>
         /// Gets a value indicating whether this connection is alive and usable.
+        /// Uses a lightweight check (Connected flag only) by default.
+        /// Call <see cref="PollIsAlive"/> for a deeper check when the connection has been idle.
         /// </summary>
         public bool IsAlive
         {
@@ -53,24 +58,40 @@ namespace FastDFS.Client.Connection
 
                 try
                 {
-                    // Check if the socket is connected
-                    if (!_socket.Connected)
-                        return false;
-
-                    // Poll for read with zero timeout to detect if the connection is closed
-                    bool poll = _socket.Poll(1000, SelectMode.SelectRead);
-                    bool available = _socket.Available == 0;
-
-                    // If Poll returns true and there's no data available, the connection is likely closed
-                    if (poll && available)
-                        return false;
-
-                    return true;
+                    return _socket.Connected;
                 }
                 catch
                 {
                     return false;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Performs a deeper liveness check using socket polling.
+        /// Use this when the connection has been sitting idle in the pool,
+        /// to detect server-side closes before attempting to reuse it.
+        /// </summary>
+        public bool PollIsAlive()
+        {
+            if (_disposed || _socket == null)
+                return false;
+
+            try
+            {
+                if (!_socket.Connected)
+                    return false;
+
+                // Poll with 1ms timeout: true + no data available = remote closed
+                bool readReady = _socket.Poll(1000, SelectMode.SelectRead);
+                if (readReady && _socket.Available == 0)
+                    return false;
+
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -94,6 +115,7 @@ namespace FastDFS.Client.Connection
             _sendTimeout = sendTimeout;
             _receiveTimeout = receiveTimeout;
             _logger = logger ?? NullLogger<FastDFSConnection>.Instance;
+            RemoteEndpoint = $"{host}:{port}";
             CreatedTime = DateTime.UtcNow;
             LastUsedTime = CreatedTime;
         }
@@ -117,8 +139,12 @@ namespace FastDFS.Client.Connection
                 if (addresses == null || addresses.Length == 0)
                     throw new SocketException((int)SocketError.HostNotFound);
 
-                // Create socket based on address family
-                var address = addresses[0];
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Pick a random address to distribute load across multi-IP DNS entries
+                var address = addresses.Length == 1
+                    ? addresses[0]
+                    : addresses[System.Threading.Interlocked.Increment(ref _dnsRoundRobinIndex) % addresses.Length];
                 _socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
                 {
                     // Configure socket options for better performance
@@ -135,12 +161,23 @@ namespace FastDFS.Client.Connection
 
                 _logger.LogDebug("Connecting to {Endpoint} (IP: {IP})...", RemoteEndpoint, address);
 
-                // Connect asynchronously
+                // Connect asynchronously; register cancellation to close the socket
                 var endpoint = new IPEndPoint(address, _port);
-                await _socket.ConnectAsync(endpoint).ConfigureAwait(false);
+                using (cancellationToken.Register(() => _socket?.Dispose()))
+                {
+                    await _socket.ConnectAsync(endpoint).ConfigureAwait(false);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
 
                 LastUsedTime = DateTime.UtcNow;
                 _logger.LogInformation("Successfully connected to {Endpoint}", RemoteEndpoint);
+            }
+            catch (OperationCanceledException)
+            {
+                _socket?.Dispose();
+                _socket = null;
+                throw;
             }
             catch (Exception ex)
             {
@@ -227,19 +264,28 @@ namespace FastDFS.Client.Connection
                 _logger.LogTrace("Sending {ByteCount} bytes to {Endpoint}", packetBytes.Length, RemoteEndpoint);
 
                 // Send all bytes using Socket.SendAsync
-                int totalSent = 0;
-                while (totalSent < packetBytes.Length)
+                // netstandard2.0: register cancellation via socket disposal
+                using (cancellationToken.Register(() => _socket?.Dispose()))
                 {
-                    var segment = new ArraySegment<byte>(packetBytes, totalSent, packetBytes.Length - totalSent);
-                    int sent = await _socket.SendAsync(segment, SocketFlags.None).ConfigureAwait(false);
+                    int totalSent = 0;
+                    while (totalSent < packetBytes.Length)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var segment = new ArraySegment<byte>(packetBytes, totalSent, packetBytes.Length - totalSent);
+                        int sent = await _socket.SendAsync(segment, SocketFlags.None).ConfigureAwait(false);
 
-                    if (sent == 0)
-                        throw new SocketException((int)SocketError.ConnectionReset);
+                        if (sent == 0)
+                            throw new SocketException((int)SocketError.ConnectionReset);
 
-                    totalSent += sent;
+                        totalSent += sent;
+                    }
                 }
 
                 _logger.LogTrace("Successfully sent {ByteCount} bytes to {Endpoint}", packetBytes.Length, RemoteEndpoint);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (SocketException ex)
             {
@@ -276,7 +322,6 @@ namespace FastDFS.Client.Connection
                     RemoteEndpoint, header.Command, header.Status, header.BodyLength);
 
                 // Read the body if present
-                byte[]? bodyBuffer = null;
                 if (header.BodyLength > 0)
                 {
                     // Validate body length to prevent excessive memory allocation
@@ -287,38 +332,26 @@ namespace FastDFS.Client.Connection
                     }
 
                     int bodyLength = (int)header.BodyLength;
-                    bodyBuffer = ArrayPool<byte>.Shared.Rent(bodyLength);
 
-                    try
+                    // Decode() stores the body reference on the response object, so we cannot
+                    // use ArrayPool here — the buffer would be returned while still referenced.
+                    // Allocate exactly the required size and read directly into it (zero-copy).
+                    byte[] body = new byte[bodyLength];
+                    _logger.LogTrace("Reading body ({BodyLength} bytes) from {Endpoint}", bodyLength, RemoteEndpoint);
+                    await ReadExactlyAsync(body, 0, bodyLength, cancellationToken).ConfigureAwait(false);
+
+                    var response = new TResponse();
+                    response.Decode(header, body);
+
+                    if (!response.IsSuccess)
                     {
-                        _logger.LogTrace("Reading body ({BodyLength} bytes) from {Endpoint}", bodyLength, RemoteEndpoint);
-                        await ReadExactlyAsync(bodyBuffer, 0, bodyLength, cancellationToken).ConfigureAwait(false);
-
-                        // Create the response and decode it
-                        var response = new TResponse();
-
-                        // Copy the body data to a properly sized array before decoding
-                        byte[] actualBody = new byte[bodyLength];
-                        Array.Copy(bodyBuffer, 0, actualBody, 0, bodyLength);
-
-                        response.Decode(header, actualBody);
-
-                        // Check if the response indicates an error
-                        if (!response.IsSuccess)
-                        {
-                            _logger.LogWarning("FastDFS server {Endpoint} returned error status: {Status}", RemoteEndpoint, header.Status);
-                            throw new FastDFSProtocolException(
-                                $"FastDFS server returned error. Status code: {header.Status}",
-                                header.Status);
-                        }
-
-                        return response;
+                        _logger.LogWarning("FastDFS server {Endpoint} returned error status: {Status}", RemoteEndpoint, header.Status);
+                        throw new FastDFSProtocolException(
+                            $"FastDFS server returned error. Status code: {header.Status}",
+                            header.Status);
                     }
-                    finally
-                    {
-                        if (bodyBuffer != null)
-                            ArrayPool<byte>.Shared.Return(bodyBuffer);
-                    }
+
+                    return response;
                 }
                 else
                 {
@@ -370,19 +403,24 @@ namespace FastDFS.Client.Connection
             if (_socket == null || !_socket.Connected)
                 throw new InvalidOperationException("Socket is not connected.");
 
-            int totalRead = 0;
-            while (totalRead < count)
+            // netstandard2.0: register cancellation via socket disposal
+            using (cancellationToken.Register(() => _socket?.Dispose()))
             {
-                var segment = new ArraySegment<byte>(buffer, offset + totalRead, count - totalRead);
-                int bytesRead = await _socket.ReceiveAsync(segment, SocketFlags.None).ConfigureAwait(false);
-
-                if (bytesRead == 0)
+                int totalRead = 0;
+                while (totalRead < count)
                 {
-                    throw new EndOfStreamException(
-                        $"Connection closed unexpectedly. Expected {count} bytes but received {totalRead} bytes.");
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var segment = new ArraySegment<byte>(buffer, offset + totalRead, count - totalRead);
+                    int bytesRead = await _socket.ReceiveAsync(segment, SocketFlags.None).ConfigureAwait(false);
 
-                totalRead += bytesRead;
+                    if (bytesRead == 0)
+                    {
+                        throw new EndOfStreamException(
+                            $"Connection closed unexpectedly. Expected {count} bytes but received {totalRead} bytes.");
+                    }
+
+                    totalRead += bytesRead;
+                }
             }
         }
 

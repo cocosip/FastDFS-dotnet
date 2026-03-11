@@ -173,7 +173,7 @@ namespace FastDFS.Client.DependencyInjection
         /// </summary>
         private IFastDFSClient GetOrCreateSharedClient(string name, FastDFSConfiguration configuration)
         {
-            var configKey = ComputeConfigKey(configuration);
+            var configKey = configuration.GetConfigKey();
 
             if (_sharedClients.TryGetValue(configKey, out var existing))
             {
@@ -273,47 +273,6 @@ namespace FastDFS.Client.DependencyInjection
         {
             var trackerEndpoints = configuration.TrackerServers.ToList();
             return new TrackerClient(trackerEndpoints, configuration.ConnectionPool, _loggerFactory);
-        }
-
-        /// <summary>
-        /// Computes a fingerprint string that uniquely identifies a configuration.
-        /// Two configurations that produce the same key will share a physical client.
-        /// </summary>
-        private static string ComputeConfigKey(FastDFSConfiguration config)
-        {
-            var trackers = string.Join(",", config.TrackerServers
-                .Select(s => s.Trim().ToLowerInvariant())
-                .OrderBy(s => s));
-
-            var pool = config.ConnectionPool;
-            var sb = new StringBuilder()
-                .Append(trackers).Append('|')
-                .Append(pool.MaxConnectionPerServer).Append(',')
-                .Append(pool.MinConnectionPerServer).Append(',')
-                .Append(pool.ConnectionTimeout).Append(',')
-                .Append(pool.SendTimeout).Append(',')
-                .Append(pool.ReceiveTimeout).Append(',')
-                .Append(pool.ConnectionIdleTimeout).Append(',')
-                .Append(pool.ConnectionLifetime).Append('|')
-                .Append(config.NetworkTimeout).Append('|')
-                .Append(config.Charset ?? string.Empty).Append('|')
-                .Append(config.DefaultGroupName ?? string.Empty).Append('|')
-                .Append((int)config.StorageSelectionStrategy);
-
-            if (config.HttpConfig != null)
-            {
-                var urls = string.Join(",", config.HttpConfig.ServerUrls
-                    .OrderBy(kvp => kvp.Key)
-                    .Select(kvp => $"{kvp.Key}={kvp.Value}"));
-                sb.Append('|')
-                  .Append(urls).Append('|')
-                  .Append(config.HttpConfig.SecretKey ?? string.Empty).Append('|')
-                  .Append(config.HttpConfig.AntiStealTokenEnabled).Append('|')
-                  .Append(config.HttpConfig.DefaultTokenExpireSeconds).Append('|')
-                  .Append(config.HttpConfig.DefaultServerUrlTemplate ?? string.Empty);
-            }
-
-            return sb.ToString();
         }
 
         private void ThrowIfDisposed()

@@ -23,7 +23,7 @@ namespace FastDFS.Client.Tracker
         private readonly Dictionary<string, IConnectionPool> _connectionPools;
         private readonly ConnectionPoolConfiguration _poolOptions;
         private readonly ILogger _logger;
-        private int _currentTrackerIndex;
+        private volatile int _currentTrackerIndex;
         private bool _disposed;
 
         /// <summary>
@@ -316,9 +316,8 @@ namespace FastDFS.Client.Tracker
             // Try each tracker server in round-robin fashion
             while (attempts < maxAttempts)
             {
-                // Thread-safe read of current tracker index
-                var baseIndex = Interlocked.CompareExchange(ref _currentTrackerIndex, 0, 0);
-                var currentIndex = (baseIndex + attempts) % _trackerEndpoints.Count;
+                // volatile read — no lock needed for a single int
+                var currentIndex = (_currentTrackerIndex + attempts) % _trackerEndpoints.Count;
                 var endpoint = _trackerEndpoints[currentIndex];
                 var pool = _connectionPools[endpoint.Key];
 

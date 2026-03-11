@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Tracker;
 
@@ -90,7 +91,7 @@ namespace FastDFS.Client
         private readonly Dictionary<string, string> _nameToConfigKey = new();
 
         private readonly object _lock = new object();
-        private bool _disposed;
+        private int _disposed; // 0 = false, 1 = true; use Interlocked for thread-safe dispose
 
         private const string DefaultClientName = "default";
 
@@ -235,7 +236,7 @@ namespace FastDFS.Client
         /// </summary>
         private IFastDFSClient GetOrCreateSharedClient(string name, FastDFSConfiguration configuration)
         {
-            var configKey = ComputeConfigKey(configuration);
+            var configKey = configuration.GetConfigKey();
 
             if (_sharedClients.TryGetValue(configKey, out var existing))
             {
@@ -285,60 +286,17 @@ namespace FastDFS.Client
             return true;
         }
 
-        /// <summary>
-        /// Computes a fingerprint string that uniquely identifies a configuration.
-        /// Two configurations that produce the same key will share a physical client.
-        /// </summary>
-        private static string ComputeConfigKey(FastDFSConfiguration config)
-        {
-            var trackers = string.Join(",", config.TrackerServers
-                .Select(s => s.Trim().ToLowerInvariant())
-                .OrderBy(s => s));
-
-            var pool = config.ConnectionPool;
-            var sb = new StringBuilder()
-                .Append(trackers).Append('|')
-                .Append(pool.MaxConnectionPerServer).Append(',')
-                .Append(pool.MinConnectionPerServer).Append(',')
-                .Append(pool.ConnectionTimeout).Append(',')
-                .Append(pool.SendTimeout).Append(',')
-                .Append(pool.ReceiveTimeout).Append(',')
-                .Append(pool.ConnectionIdleTimeout).Append(',')
-                .Append(pool.ConnectionLifetime).Append('|')
-                .Append(config.NetworkTimeout).Append('|')
-                .Append(config.Charset ?? string.Empty).Append('|')
-                .Append(config.DefaultGroupName ?? string.Empty).Append('|')
-                .Append((int)config.StorageSelectionStrategy);
-
-            if (config.HttpConfig != null)
-            {
-                var urls = string.Join(",", config.HttpConfig.ServerUrls
-                    .OrderBy(kvp => kvp.Key)
-                    .Select(kvp => $"{kvp.Key}={kvp.Value}"));
-                sb.Append('|')
-                  .Append(urls).Append('|')
-                  .Append(config.HttpConfig.SecretKey ?? string.Empty).Append('|')
-                  .Append(config.HttpConfig.AntiStealTokenEnabled).Append('|')
-                  .Append(config.HttpConfig.DefaultTokenExpireSeconds).Append('|')
-                  .Append(config.HttpConfig.DefaultServerUrlTemplate ?? string.Empty);
-            }
-
-            return sb.ToString();
-        }
-
         private void ThrowIfDisposed()
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposed) == 1)
                 throw new ObjectDisposedException(nameof(FastDFSClientManager));
         }
 
         /// <inheritdoc/>
         public void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
                 return;
-
-            _disposed = true;
 
             lock (_lock)
             {
