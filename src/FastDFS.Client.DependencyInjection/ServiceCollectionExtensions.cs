@@ -14,6 +14,23 @@ namespace FastDFS.Client.DependencyInjection
         private const string DefaultClientName = "default";
 
         /// <summary>
+        /// Adds FastDFS client factory services to the service collection without any pre-configured clients.
+        /// Use this overload when all clients will be registered dynamically at runtime via
+        /// <see cref="IFastDFSClientFactory.RegisterClient"/>.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <returns>The service collection for chaining.</returns>
+        public static IServiceCollection AddFastDFS(this IServiceCollection services)
+        {
+            if (services == null)
+                throw new ArgumentNullException(nameof(services));
+
+            services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
+
+            return services;
+        }
+
+        /// <summary>
         /// Adds FastDFS client services to the service collection with default client name.
         /// This registers a single-cluster FastDFS client.
         /// </summary>
