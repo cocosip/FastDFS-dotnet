@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Storage;
@@ -24,20 +23,7 @@ namespace FastDFS.Client
             if (configuration == null)
                 throw new ArgumentNullException(nameof(configuration));
 
-            configuration.Validate();
-
-            var trackerEndpoints = configuration.TrackerServers.ToList();
-            var trackerClient = new TrackerClient(trackerEndpoints, configuration.ConnectionPool);
-            var storageClient = new StorageClient(configuration.ConnectionPool);
-
-            return new FastDFSClient(
-                trackerClient,
-                storageClient,
-                name,
-                configuration.DefaultGroupName,
-                configuration.StorageSelectionStrategy,
-                configuration.HttpConfig,
-                configuration.ConnectionPool.StreamCopyBufferSize);
+            return FastDFSClientComposer.Compose(configuration, name);
         }
 
         /// <summary>

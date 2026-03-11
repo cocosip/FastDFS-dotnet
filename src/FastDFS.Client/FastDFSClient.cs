@@ -40,15 +40,7 @@ namespace FastDFS.Client
         /// <param name="defaultGroupName">The default storage group name to use when not specified.</param>
         /// <param name="selectionStrategy">The storage selection strategy for client-side load balancing.</param>
         /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
-        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
-        /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
-        /// <param name="trackerClient">The tracker client for querying storage servers.</param>
-        /// <param name="storageClient">The storage client for executing storage operations.</param>
-        /// <param name="name">The name of this client instance (for multi-cluster scenarios).</param>
-        /// <param name="defaultGroupName">The default storage group name to use when not specified.</param>
-        /// <param name="selectionStrategy">The storage selection strategy for client-side load balancing.</param>
-        /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
-        /// <param name="streamCopyBufferSize">Optional buffer size for stream copy operations. If null, uses default 81920 bytes.</param>
+        /// <param name="streamCopyBufferSize">Stram copy buffer size</param>
         /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
         /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
         public FastDFSClient(
@@ -100,7 +92,7 @@ namespace FastDFS.Client
         // ==================== Storage Selection ====================
 
         private async Task<StorageServerInfo> SelectStorageForUploadAsync(
-            string? groupName, 
+            string? groupName,
             CancellationToken cancellationToken)
         {
             if (_selectionStrategy == StorageSelectionStrategy.TrackerSelection)
@@ -114,8 +106,8 @@ namespace FastDFS.Client
         }
 
         private async Task<StorageServerInfo> SelectStorageForDownloadAsync(
-            string groupName, 
-            string fileName, 
+            string groupName,
+            string fileName,
             CancellationToken cancellationToken)
         {
             if (_selectionStrategy == StorageSelectionStrategy.TrackerSelection)
@@ -143,9 +135,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when content is null/empty or fileExtension is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
         public async Task<string> UploadAsync(
-            string? groupName, 
-            byte[] content, 
-            string fileExtension, 
+            string? groupName,
+            byte[] content,
+            string fileExtension,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -178,9 +170,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when stream is not readable or fileExtension is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
         public async Task<string> UploadAsync(
-            string? groupName, 
-            Stream stream, 
-            string fileExtension, 
+            string? groupName,
+            Stream stream,
+            string fileExtension,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -207,8 +199,8 @@ namespace FastDFS.Client
         /// <exception cref="FileNotFoundException">Thrown when the local file does not exist.</exception>
         /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
         public async Task<string> UploadFileAsync(
-            string? groupName, 
-            string localFilePath, 
+            string? groupName,
+            string localFilePath,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -243,9 +235,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when content is null/empty or fileExtension is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
         public async Task<string> UploadAppenderFileAsync(
-            string? groupName, 
-            byte[] content, 
-            string fileExtension, 
+            string? groupName,
+            byte[] content,
+            string fileExtension,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -270,7 +262,7 @@ namespace FastDFS.Client
         /// <exception cref="ObjectDisposedException">Thrown when the client has been disposed.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task<byte[]> DownloadAsync(
-            string fileId, 
+            string fileId,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -290,8 +282,8 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when groupName or fileName is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task<byte[]> DownloadAsync(
-            string? groupName, 
-            string fileName, 
+            string? groupName,
+            string fileName,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -311,8 +303,8 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentNullException">Thrown when outputStream is null.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task DownloadAsync(
-            string fileId, 
-            Stream outputStream, 
+            string fileId,
+            Stream outputStream,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -334,9 +326,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when groupName or fileName is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task DownloadAsync(
-            string? groupName, 
-            string fileName, 
-            Stream outputStream, 
+            string? groupName,
+            string fileName,
+            Stream outputStream,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -356,8 +348,8 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when localFilePath is null or empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task DownloadFileAsync(
-            string fileId, 
-            string localFilePath, 
+            string fileId,
+            string localFilePath,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -380,9 +372,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentException">Thrown when localFilePath is null or empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task DownloadFileAsync(
-            string? groupName, 
-            string fileName, 
-            string localFilePath, 
+            string? groupName,
+            string fileName,
+            string localFilePath,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -406,9 +398,9 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentOutOfRangeException">Thrown when offset or length is negative.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task<byte[]> DownloadAsync(
-            string fileId, 
-            long offset, 
-            long length, 
+            string fileId,
+            long offset,
+            long length,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -431,10 +423,10 @@ namespace FastDFS.Client
         /// <exception cref="ArgumentOutOfRangeException">Thrown when offset or length is negative.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         public async Task<byte[]> DownloadAsync(
-            string? groupName, 
-            string fileName, 
-            long offset, 
-            long length, 
+            string? groupName,
+            string fileName,
+            long offset,
+            long length,
             CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
@@ -446,10 +438,10 @@ namespace FastDFS.Client
         }
 
         private async Task<byte[]> DownloadCoreAsync(
-            string groupName, 
-            string fileName, 
-            long offset, 
-            long length, 
+            string groupName,
+            string fileName,
+            long offset,
+            long length,
             CancellationToken cancellationToken)
         {
             _logger.LogInformation("Downloading file: group={GroupName}, file={FileName}", groupName, fileName);

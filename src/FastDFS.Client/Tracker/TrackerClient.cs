@@ -20,22 +20,12 @@ namespace FastDFS.Client.Tracker
     /// </summary>
     public class TrackerClient : ITrackerClient, IDisposable
     {
-        private readonly List<TrackerServerEndpoint> _trackerEndpoints;
-        private readonly Dictionary<string, IConnectionPool> _connectionPools;
-        private readonly ConnectionPoolConfiguration _poolOptions;
+        private readonly List<ConnectionEndpoint> _trackerEndpoints;
+        private readonly IConnectionPoolProvider _poolProvider;
         private readonly ILogger _logger;
+        private readonly bool _ownsPoolProvider;
         private volatile int _currentTrackerIndex;
         private bool _disposed;
-
-        /// <summary>
-        /// Represents a tracker server endpoint.
-        /// </summary>
-        private class TrackerServerEndpoint
-        {
-            public string Host { get; set; } = string.Empty;
-            public int Port { get; set; }
-            public string Key => $"{Host}:{Port}";
-        }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TrackerClient"/> class.
@@ -47,42 +37,41 @@ namespace FastDFS.Client.Tracker
             IEnumerable<string> trackerServers,
             ConnectionPoolConfiguration configuration,
             ILoggerFactory? loggerFactory = null)
+            : this(trackerServers, new ConnectionPoolProvider(configuration, loggerFactory), loggerFactory, true)
         {
-            if (trackerServers == null || !trackerServers.Any())
-                throw new ArgumentException("At least one tracker server must be specified.", nameof(trackerServers));
-            if (configuration == null)
-                throw new ArgumentNullException(nameof(configuration));
+        }
 
-            configuration.Validate();
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TrackerClient"/> class.
+        /// </summary>
+        /// <param name="trackerServers">List of tracker server addresses in the format "host:port".</param>
+        /// <param name="poolProvider">The shared connection pool provider.</param>
+        /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        public TrackerClient(
+            IEnumerable<string> trackerServers,
+            IConnectionPoolProvider poolProvider,
+            ILoggerFactory? loggerFactory = null)
+            : this(trackerServers, poolProvider, loggerFactory, false)
+        {
+        }
 
-            _poolOptions = configuration;
+        private TrackerClient(
+            IEnumerable<string> trackerServers,
+            IConnectionPoolProvider poolProvider,
+            ILoggerFactory? loggerFactory,
+            bool ownsPoolProvider)
+        {
+            if (trackerServers == null)
+                throw new ArgumentNullException(nameof(trackerServers));
+
+            _poolProvider = poolProvider ?? throw new ArgumentNullException(nameof(poolProvider));
             _logger = loggerFactory?.CreateLogger<TrackerClient>() ?? NullLogger<TrackerClient>.Instance;
-            _trackerEndpoints = [];
-            _connectionPools = [];
+            _trackerEndpoints = trackerServers.Select(ConnectionEndpoint.Parse).ToList();
+            if (_trackerEndpoints.Count == 0)
+                throw new ArgumentException("At least one tracker server must be specified.", nameof(trackerServers));
+
+            _ownsPoolProvider = ownsPoolProvider;
             _currentTrackerIndex = 0;
-
-            // Parse tracker server addresses
-            foreach (var server in trackerServers)
-            {
-                var parts = server.Split(':');
-                if (parts.Length != 2)
-                    throw new ArgumentException($"Invalid tracker server address format: {server}. Expected format: 'host:port'");
-
-                if (!int.TryParse(parts[1], out int port))
-                    throw new ArgumentException($"Invalid port number in tracker server address: {server}");
-
-                var endpoint = new TrackerServerEndpoint
-                {
-                    Host = parts[0].Trim(),
-                    Port = port
-                };
-
-                _trackerEndpoints.Add(endpoint);
-
-                // Create a connection pool for each tracker server
-                var poolLogger = loggerFactory?.CreateLogger<ConnectionPool>();
-                _connectionPools[endpoint.Key] = new ConnectionPool(endpoint.Host, endpoint.Port, _poolOptions, poolLogger);
-            }
 
             _logger.LogInformation("TrackerClient initialized with {TrackerCount} tracker server(s): {TrackerSerkers}",
                 _trackerEndpoints.Count, string.Join(", ", _trackerEndpoints.Select(e => e.Key)));
@@ -343,7 +332,7 @@ namespace FastDFS.Client.Tracker
                 // volatile read — no lock needed for a single int
                 var currentIndex = (_currentTrackerIndex + attempts) % _trackerEndpoints.Count;
                 var endpoint = _trackerEndpoints[currentIndex];
-                var pool = _connectionPools[endpoint.Key];
+                var pool = _poolProvider.GetOrCreate(endpoint);
 
                 _logger.LogDebug("Attempting operation on tracker {Tracker} (attempt {Attempt}/{MaxAttempts})",
                     endpoint.Key, attempts + 1, maxAttempts);
@@ -478,12 +467,11 @@ namespace FastDFS.Client.Tracker
 
             _disposed = true;
 
-            // Dispose all connection pools
-            foreach (var pool in _connectionPools.Values)
+            if (_ownsPoolProvider)
             {
                 try
                 {
-                    pool.Dispose();
+                    _poolProvider.Dispose();
                 }
                 catch
                 {
@@ -491,18 +479,13 @@ namespace FastDFS.Client.Tracker
                 }
             }
 
-            _connectionPools.Clear();
-
             GC.SuppressFinalize(this);
         }
 
         /// <summary>
         /// Returns a string representation of the tracker client.
         /// </summary>
-        public override string ToString()
-        {
-            var servers = string.Join(", ", _trackerEndpoints.Select(e => e.Key));
-            return $"TrackerClient [Servers={servers}, CurrentIndex={_currentTrackerIndex}]";
-        }
+        public override string ToString() =>
+            $"TrackerClient [Trackers={string.Join(", ", _trackerEndpoints.Select(e => e.Key))}, CurrentTrackerIndex={_currentTrackerIndex}]";
     }
 }

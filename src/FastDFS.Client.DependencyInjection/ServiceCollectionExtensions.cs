@@ -1,5 +1,6 @@
 using System;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Connection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -25,6 +26,7 @@ namespace FastDFS.Client.DependencyInjection
             if (services == null)
                 throw new ArgumentNullException(nameof(services));
 
+            services.TryAddSingleton<IConnectionPoolProviderFactory, DefaultConnectionPoolProviderFactory>();
             services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
 
             return services;
@@ -73,6 +75,7 @@ namespace FastDFS.Client.DependencyInjection
             services.Configure(name, configure);
 
             // Register factory as singleton (only once)
+            services.TryAddSingleton<IConnectionPoolProviderFactory, DefaultConnectionPoolProviderFactory>();
             services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
 
             // If this is the default client, also register IFastDFSClient for direct injection
@@ -119,6 +122,7 @@ namespace FastDFS.Client.DependencyInjection
                 }
 
                 // Register factory
+                services.TryAddSingleton<IConnectionPoolProviderFactory, DefaultConnectionPoolProviderFactory>();
                 services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
 
                 // Register default client if it exists
@@ -138,6 +142,7 @@ namespace FastDFS.Client.DependencyInjection
                 services.Configure<FastDFSConfiguration>(DefaultClientName, configuration);
 
                 // Register factory
+                services.TryAddSingleton<IConnectionPoolProviderFactory, DefaultConnectionPoolProviderFactory>();
                 services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
 
                 // Register default client
@@ -174,6 +179,7 @@ namespace FastDFS.Client.DependencyInjection
             services.Configure<FastDFSConfiguration>(name, configuration);
 
             // Register factory as singleton (only once)
+            services.TryAddSingleton<IConnectionPoolProviderFactory, DefaultConnectionPoolProviderFactory>();
             services.TryAddSingleton<IFastDFSClientFactory, FastDFSClientFactory>();
 
             // If this is the default client, also register IFastDFSClient for direct injection

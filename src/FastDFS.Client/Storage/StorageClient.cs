@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
@@ -23,21 +22,34 @@ namespace FastDFS.Client.Storage
     /// </summary>
     public class StorageClient : IStorageClient, IDisposable
     {
-        private readonly ConnectionPoolConfiguration _poolOptions;
-        private readonly ILoggerFactory? _loggerFactory;
+        private readonly IConnectionPoolProvider _poolProvider;
         private readonly ILogger _logger;
-        private readonly ConcurrentDictionary<string, IConnectionPool> _storagePools;
+        private readonly bool _ownsPoolProvider;
         private bool _disposed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StorageClient"/> class.
         /// </summary>
         public StorageClient(ConnectionPoolConfiguration poolOptions, ILoggerFactory? loggerFactory = null)
+            : this(new ConnectionPoolProvider(poolOptions, loggerFactory), loggerFactory, true)
         {
-            _poolOptions = poolOptions ?? throw new ArgumentNullException(nameof(poolOptions));
-            _loggerFactory = loggerFactory;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StorageClient"/> class.
+        /// </summary>
+        /// <param name="poolProvider">The shared connection pool provider.</param>
+        /// <param name="loggerFactory">Optional logger factory.</param>
+        public StorageClient(IConnectionPoolProvider poolProvider, ILoggerFactory? loggerFactory = null)
+            : this(poolProvider, loggerFactory, false)
+        {
+        }
+
+        private StorageClient(IConnectionPoolProvider poolProvider, ILoggerFactory? loggerFactory, bool ownsPoolProvider)
+        {
+            _poolProvider = poolProvider ?? throw new ArgumentNullException(nameof(poolProvider));
             _logger = loggerFactory?.CreateLogger<StorageClient>() ?? NullLogger<StorageClient>.Instance;
-            _storagePools = new ConcurrentDictionary<string, IConnectionPool>();
+            _ownsPoolProvider = ownsPoolProvider;
 
             _logger.LogInformation("StorageClient initialized");
         }
@@ -56,10 +68,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
             {
                 var request = new UploadFileRequest
                 {
@@ -69,13 +79,8 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<UploadFileRequest, UploadFileResponse>(request, cancellationToken).ConfigureAwait(false);
-
                 return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -93,10 +98,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
             {
                 var request = new UploadAppenderFileRequest
                 {
@@ -106,13 +109,8 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<UploadAppenderFileRequest, UploadFileResponse>(request, cancellationToken).ConfigureAwait(false);
-
                 return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -128,10 +126,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            await pool.ExecuteAsync(async connection =>
             {
                 var request = new AppendFileRequest
                 {
@@ -140,11 +136,7 @@ namespace FastDFS.Client.Storage
                 };
 
                 await connection.SendRequestAsync<AppendFileRequest, AppendFileResponse>(request, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -163,10 +155,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
             {
                 var request = new DownloadFileRequest
                 {
@@ -177,13 +167,8 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<DownloadFileRequest, DownloadFileResponse>(request, cancellationToken).ConfigureAwait(false);
-
                 return response.Content;
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -199,10 +184,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            await pool.ExecuteAsync(async connection =>
             {
                 var request = new DeleteFileRequest
                 {
@@ -211,11 +194,7 @@ namespace FastDFS.Client.Storage
                 };
 
                 await connection.SendRequestAsync<DeleteFileRequest, DeleteFileResponse>(request, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -232,10 +211,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
             {
                 var request = new QueryFileInfoRequest
                 {
@@ -244,13 +221,8 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<QueryFileInfoRequest, QueryFileInfoResponse>(request, cancellationToken).ConfigureAwait(false);
-
                 return response.FileInfo ?? new FastDFSFileInfo();
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -268,10 +240,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            await pool.ExecuteAsync(async connection =>
             {
                 var request = new SetMetadataRequest
                 {
@@ -282,11 +252,7 @@ namespace FastDFS.Client.Storage
                 };
 
                 await connection.SendRequestAsync<SetMetadataRequest, SetMetadataResponse>(request, cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -303,10 +269,8 @@ namespace FastDFS.Client.Storage
         {
             ThrowIfDisposed();
 
-            var pool = GetOrCreateStoragePool(server.IpAddress, server.Port);
-            var connection = await pool.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-            try
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
             {
                 var request = new GetMetadataRequest
                 {
@@ -315,23 +279,14 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<GetMetadataRequest, GetMetadataResponse>(request, cancellationToken).ConfigureAwait(false);
-
                 return response.Metadata;
-            }
-            finally
-            {
-                pool.ReturnConnection(connection);
-            }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
-        private IConnectionPool GetOrCreateStoragePool(string host, int port)
+        private IConnectionPool GetOrCreateStoragePool(StorageServerInfo server)
         {
-            var key = $"{host}:{port}";
-            return _storagePools.GetOrAdd(key, _ =>
-            {
-                var poolLogger = _loggerFactory?.CreateLogger<ConnectionPool>();
-                return new ConnectionPool(host, port, _poolOptions, poolLogger);
-            });
+            var endpoint = new ConnectionEndpoint(server.IpAddress, server.Port);
+            return _poolProvider.GetOrCreate(endpoint);
         }
 
         private void ThrowIfDisposed()
@@ -350,19 +305,16 @@ namespace FastDFS.Client.Storage
 
             _disposed = true;
 
-            foreach (var pool in _storagePools.Values)
+            if (_ownsPoolProvider)
             {
-                try { pool.Dispose(); }
-                catch { }
+                _poolProvider.Dispose();
             }
-
-            _storagePools.Clear();
 
             GC.SuppressFinalize(this);
         }
 
         /// <inheritdoc/>
         public override string ToString() =>
-            $"StorageClient [ActiveStoragePools={_storagePools.Count}]";
+            $"StorageClient [ActiveStoragePools={_poolProvider.GetEndpoints().Count}]";
     }
 }

@@ -2,8 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Connection;
 using FastDFS.Client.Storage;
 using FastDFS.Client.Tracker;
 using Microsoft.Extensions.Logging;
@@ -20,6 +20,7 @@ namespace FastDFS.Client.DependencyInjection
     public class FastDFSClientFactory : IFastDFSClientFactory, IDisposable
     {
         private readonly IOptionsMonitor<FastDFSConfiguration> _optionsMonitor;
+        private readonly IConnectionPoolProviderFactory _poolProviderFactory;
         private readonly ILoggerFactory? _loggerFactory;
         private readonly ILogger _logger;
 
@@ -42,9 +43,11 @@ namespace FastDFS.Client.DependencyInjection
         /// </summary>
         public FastDFSClientFactory(
             IOptionsMonitor<FastDFSConfiguration> optionsMonitor,
+            IConnectionPoolProviderFactory poolProviderFactory,
             ILoggerFactory? loggerFactory = null)
         {
             _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
+            _poolProviderFactory = poolProviderFactory ?? throw new ArgumentNullException(nameof(poolProviderFactory));
             _loggerFactory = loggerFactory;
             _logger = loggerFactory?.CreateLogger<FastDFSClientFactory>() ?? NullLogger<FastDFSClientFactory>.Instance;
             _clients = new ConcurrentDictionary<string, IFastDFSClient>();
@@ -186,8 +189,9 @@ namespace FastDFS.Client.DependencyInjection
             }
 
             // Create new physical client
-            var trackerClient = new TrackerClient(configuration.TrackerServers, configuration.ConnectionPool, _loggerFactory);
-            var storageClient = new StorageClient(configuration.ConnectionPool, _loggerFactory);
+            var poolProvider = _poolProviderFactory.Create(configuration.ConnectionPool);
+            var trackerClient = new TrackerClient(configuration.TrackerServers, poolProvider, _loggerFactory);
+            var storageClient = new StorageClient(poolProvider, _loggerFactory);
             var client = new FastDFSClient(
                 trackerClient,
                 storageClient,
