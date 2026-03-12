@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Connection;
 using FastDFS.Client.Storage;
@@ -15,7 +16,7 @@ namespace FastDFS.Client.DependencyInjection
     /// <summary>
     /// Default implementation of IFastDFSClientFactory.
     /// Manages multiple named FastDFS client instances for multi-cluster scenarios.
-    /// Clients with identical configurations share the same underlying connection pool.
+    /// Clients with identical configurations share the same underlying connection pool resources.
     /// </summary>
     public class FastDFSClientFactory : IFastDFSClientFactory, IDisposable
     {
@@ -24,17 +25,17 @@ namespace FastDFS.Client.DependencyInjection
         private readonly ILoggerFactory? _loggerFactory;
         private readonly ILogger _logger;
 
-        // name -> client instance (multiple names may point to the same physical instance)
+        // name -> logical client instance
         private readonly ConcurrentDictionary<string, IFastDFSClient> _clients;
         private readonly ConcurrentDictionary<string, FastDFSConfiguration> _runtimeConfigurations;
 
-        // Shared physical clients keyed by config fingerprint (protected by _lock)
-        private readonly Dictionary<string, IFastDFSClient> _sharedClients = new();
+        // Shared connection pool resources keyed by config fingerprint (protected by _lock)
+        private readonly Dictionary<string, SharedClientResources> _sharedResources = new();
         private readonly Dictionary<string, int> _sharedRefCounts = new();
         private readonly Dictionary<string, string> _nameToConfigKey = new();
 
         private readonly object _lock = new object();
-        private bool _disposed;
+        private int _disposed;
 
         private const string DefaultClientName = "default";
 
@@ -67,20 +68,19 @@ namespace FastDFS.Client.DependencyInjection
 
             ThrowIfDisposed();
 
-            if (_clients.TryGetValue(name, out var existingClient))
-            {
-                _logger.LogDebug("Returning existing FastDFS client '{ClientName}'", name);
-                return existingClient;
-            }
-
             lock (_lock)
             {
-                if (_clients.TryGetValue(name, out existingClient))
+                ThrowIfDisposed();
+
+                if (_clients.TryGetValue(name, out var existingClient))
+                {
+                    _logger.LogDebug("Returning existing FastDFS client '{ClientName}'", name);
                     return existingClient;
+                }
 
                 _logger.LogInformation("Creating FastDFS client '{ClientName}'", name);
 
-                FastDFSConfiguration? options = null;
+                FastDFSConfiguration? options;
                 if (_runtimeConfigurations.TryGetValue(name, out var runtimeConfig))
                 {
                     options = runtimeConfig;
@@ -115,6 +115,8 @@ namespace FastDFS.Client.DependencyInjection
 
             lock (_lock)
             {
+                ThrowIfDisposed();
+
                 return _runtimeConfigurations.Keys
                     .Concat(_clients.Keys)
                     .Distinct(StringComparer.Ordinal)
@@ -130,17 +132,22 @@ namespace FastDFS.Client.DependencyInjection
 
             ThrowIfDisposed();
 
-            if (_runtimeConfigurations.ContainsKey(name) || _clients.ContainsKey(name))
-                return true;
+            lock (_lock)
+            {
+                ThrowIfDisposed();
 
-            try
-            {
-                var options = _optionsMonitor.Get(name);
-                return options?.TrackerServers != null && options.TrackerServers.Count > 0;
-            }
-            catch
-            {
-                return false;
+                if (_runtimeConfigurations.ContainsKey(name) || _clients.ContainsKey(name))
+                    return true;
+
+                try
+                {
+                    var options = _optionsMonitor.Get(name);
+                    return options?.TrackerServers != null && options.TrackerServers.Count > 0;
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
 
@@ -158,6 +165,7 @@ namespace FastDFS.Client.DependencyInjection
 
             lock (_lock)
             {
+                ThrowIfDisposed();
                 _logger.LogInformation("Registering FastDFS client '{ClientName}' at runtime", name);
 
                 if (_clients.ContainsKey(name))
@@ -185,33 +193,44 @@ namespace FastDFS.Client.DependencyInjection
 
             lock (_lock)
             {
+                ThrowIfDisposed();
                 return RemoveClientInternal(name);
             }
         }
 
         /// <summary>
-        /// Returns an existing shared physical client if one with the same configuration exists,
-        /// otherwise creates a new one. Must be called within <see cref="_lock"/>.
+        /// Creates a logical named client backed by shared connection pool resources when the
+        /// configuration fingerprint matches an existing registration. Must be called within <see cref="_lock"/>.
         /// </summary>
         private IFastDFSClient GetOrCreateSharedClient(string name, FastDFSConfiguration configuration)
         {
             var configKey = configuration.GetConfigKey();
 
-            if (_sharedClients.TryGetValue(configKey, out var existing))
+            if (!_sharedResources.TryGetValue(configKey, out var sharedResources))
             {
-                _nameToConfigKey[name] = configKey;
-                _sharedRefCounts[configKey]++;
+                var poolProvider = _poolProviderFactory.Create(configuration.ConnectionPool);
+                sharedResources = new SharedClientResources(poolProvider);
+                _sharedResources[configKey] = sharedResources;
+                _sharedRefCounts[configKey] = 0;
+
                 _logger.LogInformation(
-                    "FastDFS client '{Name}' sharing connection pool with {Count} existing client(s) (identical configuration)",
-                    name, _sharedRefCounts[configKey] - 1);
-                return existing;
+                    "Created shared connection pool resources for '{Name}' with {TrackerCount} tracker server(s)",
+                    name, configuration.TrackerServers.Count);
             }
 
-            // Create new physical client
-            var poolProvider = _poolProviderFactory.Create(configuration.ConnectionPool);
-            var trackerClient = new TrackerClient(configuration.TrackerServers, poolProvider, _loggerFactory);
-            var storageClient = new StorageClient(poolProvider, configuration.ConnectionPool.StreamCopyBufferSize, _loggerFactory);
-            var client = new FastDFSClient(
+            _nameToConfigKey[name] = configKey;
+            _sharedRefCounts[configKey]++;
+
+            if (_sharedRefCounts[configKey] > 1)
+            {
+                _logger.LogInformation(
+                    "FastDFS client '{Name}' sharing connection pool resources with {Count} existing client(s) (identical configuration)",
+                    name, _sharedRefCounts[configKey] - 1);
+            }
+
+            var trackerClient = new TrackerClient(configuration.TrackerServers, sharedResources.PoolProvider, _loggerFactory);
+            var storageClient = new StorageClient(sharedResources.PoolProvider, configuration.ConnectionPool.StreamCopyBufferSize, _loggerFactory);
+            return new FastDFSClient(
                 trackerClient,
                 storageClient,
                 name,
@@ -219,29 +238,28 @@ namespace FastDFS.Client.DependencyInjection
                 configuration.StorageSelectionStrategy,
                 configuration.HttpConfig,
                 _loggerFactory);
-
-            _sharedClients[configKey] = client;
-            _sharedRefCounts[configKey] = 1;
-            _nameToConfigKey[name] = configKey;
-
-            _logger.LogInformation(
-                "Created new physical FastDFS client for '{Name}' with {TrackerCount} tracker server(s)",
-                name, configuration.TrackerServers.Count);
-
-            return client;
         }
 
         /// <summary>
-        /// Removes a client by name and decrements the shared ref count,
-        /// disposing the physical client only when the last reference is removed.
+        /// Removes a client by name and decrements the shared reference count,
+        /// disposing the shared pool resources only when the last reference is removed.
         /// Must be called within <see cref="_lock"/>.
         /// </summary>
         private bool RemoveClientInternal(string name)
         {
-            if (!_clients.TryRemove(name, out _))
+            if (!_clients.TryRemove(name, out var client))
                 return false;
 
             _logger.LogInformation("Removing FastDFS client '{ClientName}'", name);
+
+            try
+            {
+                (client as IDisposable)?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error disposing FastDFS client '{ClientName}'", name);
+            }
 
             if (_nameToConfigKey.TryGetValue(name, out var configKey))
             {
@@ -252,25 +270,25 @@ namespace FastDFS.Client.DependencyInjection
                 {
                     _sharedRefCounts.Remove(configKey);
 
-                    if (_sharedClients.TryGetValue(configKey, out var sharedClient))
+                    if (_sharedResources.TryGetValue(configKey, out var sharedResources))
                     {
-                        _sharedClients.Remove(configKey);
+                        _sharedResources.Remove(configKey);
                         try
                         {
-                            (sharedClient as IDisposable)?.Dispose();
+                            sharedResources.Dispose();
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogWarning(ex, "Error disposing shared FastDFS client for '{ClientName}'", name);
+                            _logger.LogWarning(ex, "Error disposing shared connection pool resources for '{ClientName}'", name);
                         }
                     }
 
-                    _logger.LogDebug("Physical client disposed — last reference removed");
+                    _logger.LogDebug("Shared connection pool resources disposed — last reference removed");
                 }
                 else
                 {
                     _logger.LogDebug(
-                        "Physical client for '{Name}' still referenced by {Count} other client(s), not disposed",
+                        "Shared connection pool resources for '{Name}' still referenced by {Count} other client(s), not disposed",
                         name, refCount);
                 }
             }
@@ -281,48 +299,72 @@ namespace FastDFS.Client.DependencyInjection
 
         private void ThrowIfDisposed()
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposed) == 1)
                 throw new ObjectDisposedException(nameof(FastDFSClientFactory));
         }
 
         /// <inheritdoc/>
         public void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
                 return;
 
-            _disposed = true;
-
             _logger.LogInformation(
-                "Disposing FastDFSClientFactory ({PhysicalCount} physical client(s), {NameCount} named client(s))",
-                _sharedClients.Count, _clients.Count);
+                "Disposing FastDFSClientFactory ({PhysicalCount} shared resource set(s), {NameCount} named client(s))",
+                _sharedResources.Count, _clients.Count);
 
             lock (_lock)
             {
-                foreach (var kvp in _sharedClients)
+                foreach (var kvp in _clients)
                 {
                     try
                     {
-                        _logger.LogDebug("Disposing physical FastDFS client '{Key}'", kvp.Key);
+                        _logger.LogDebug("Disposing logical FastDFS client '{Name}'", kvp.Key);
                         (kvp.Value as IDisposable)?.Dispose();
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Error disposing physical FastDFS client '{Key}'", kvp.Key);
+                        _logger.LogWarning(ex, "Error disposing logical FastDFS client '{Name}'", kvp.Key);
                     }
                 }
 
-                _sharedClients.Clear();
+                foreach (var kvp in _sharedResources)
+                {
+                    try
+                    {
+                        _logger.LogDebug("Disposing shared connection pool resources '{Key}'", kvp.Key);
+                        kvp.Value.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error disposing shared connection pool resources '{Key}'", kvp.Key);
+                    }
+                }
+
+                _sharedResources.Clear();
                 _sharedRefCounts.Clear();
                 _nameToConfigKey.Clear();
+                _clients.Clear();
+                _runtimeConfigurations.Clear();
             }
-
-            _clients.Clear();
-            _runtimeConfigurations.Clear();
 
             _logger.LogInformation("FastDFSClientFactory disposed successfully");
 
             GC.SuppressFinalize(this);
+        }
+        private sealed class SharedClientResources : IDisposable
+        {
+            public SharedClientResources(IConnectionPoolProvider poolProvider)
+            {
+                PoolProvider = poolProvider ?? throw new ArgumentNullException(nameof(poolProvider));
+            }
+
+            public IConnectionPoolProvider PoolProvider { get; }
+
+            public void Dispose()
+            {
+                PoolProvider.Dispose();
+            }
         }
     }
 }

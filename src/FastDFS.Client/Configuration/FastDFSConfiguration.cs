@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using FastDFS.Client.Protocol;
 using FastDFS.Client.Storage;
 
 namespace FastDFS.Client.Configuration
@@ -25,16 +26,18 @@ namespace FastDFS.Client.Configuration
 
         /// <summary>
         /// Gets or sets the network timeout in seconds.
-        /// This is a general timeout setting. Default is 30 seconds.
-        /// For more granular control, use ConnectionPool timeout settings.
+        /// This property is retained for backward compatibility; use
+        /// <see cref="ConnectionPoolConfiguration.ConnectionTimeout"/>,
+        /// <see cref="ConnectionPoolConfiguration.SendTimeout"/> and
+        /// <see cref="ConnectionPoolConfiguration.ReceiveTimeout"/> for effective timeout control.
         /// </summary>
-        public int NetworkTimeout { get; set; } = 30;
+        public int NetworkTimeout { get; set; } = FastDFSConstants.DefaultNetworkTimeoutSeconds;
 
         /// <summary>
         /// Gets or sets the charset encoding name.
-        /// Default is "UTF-8".
+        /// FastDFS protocol operations in this library currently support UTF-8 only.
         /// </summary>
-        public string Charset { get; set; } = "UTF-8";
+        public string Charset { get; set; } = FastDFSConstants.DefaultCharset;
 
         /// <summary>
         /// Gets or sets the default group name.
@@ -77,12 +80,24 @@ namespace FastDFS.Client.Configuration
 
             if (NetworkTimeout <= 0)
                 throw new ArgumentException("NetworkTimeout must be greater than 0.", nameof(NetworkTimeout));
+            if (NetworkTimeout != FastDFSConstants.DefaultNetworkTimeoutSeconds)
+                throw new ArgumentException(
+                    $"NetworkTimeout is a compatibility-only setting and only the default value ({FastDFSConstants.DefaultNetworkTimeoutSeconds}) is currently supported. " +
+                    $"Use {nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.ConnectionTimeout)}, " +
+                    $"{nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.SendTimeout)} and " +
+                    $"{nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.ReceiveTimeout)} instead.",
+                    nameof(NetworkTimeout));
 
             if (string.IsNullOrWhiteSpace(Charset))
                 throw new ArgumentException("Charset cannot be null or empty.", nameof(Charset));
+            if (!string.Equals(Charset, FastDFSConstants.DefaultCharset, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"Only {FastDFSConstants.DefaultCharset} charset is currently supported.", nameof(Charset));
 
             // Validate connection pool options
-            ConnectionPool?.Validate();
+            if (ConnectionPool == null)
+                throw new ArgumentNullException(nameof(ConnectionPool), "ConnectionPool cannot be null.");
+
+            ConnectionPool.Validate();
 
             // Validate HTTP configuration if provided
             HttpConfig?.Validate();
@@ -98,7 +113,7 @@ namespace FastDFS.Client.Configuration
                 .Select(s => s.Trim().ToLowerInvariant())
                 .OrderBy(s => s));
 
-            var pool = ConnectionPool;
+            var pool = GetRequiredConnectionPool();
             var sb = new StringBuilder()
                 .Append(trackers).Append('|')
                 .Append(pool.MaxConnectionPerServer).Append(',')
@@ -109,8 +124,6 @@ namespace FastDFS.Client.Configuration
                 .Append(pool.ConnectionIdleTimeout).Append(',')
                 .Append(pool.ConnectionLifetime).Append(',')
                 .Append(pool.StreamCopyBufferSize).Append('|')
-                .Append(NetworkTimeout).Append('|')
-                .Append(Charset ?? string.Empty).Append('|')
                 .Append(DefaultGroupName ?? string.Empty).Append('|')
                 .Append((int)StorageSelectionStrategy);
 
@@ -135,20 +148,24 @@ namespace FastDFS.Client.Configuration
         /// </summary>
         public FastDFSConfiguration Clone()
         {
+            var pool = ConnectionPool;
+
             return new FastDFSConfiguration
             {
                 TrackerServers = new List<string>(TrackerServers),
-                ConnectionPool = new ConnectionPoolConfiguration
-                {
-                    MaxConnectionPerServer = ConnectionPool.MaxConnectionPerServer,
-                    MinConnectionPerServer = ConnectionPool.MinConnectionPerServer,
-                    ConnectionIdleTimeout = ConnectionPool.ConnectionIdleTimeout,
-                    ConnectionLifetime = ConnectionPool.ConnectionLifetime,
-                    ConnectionTimeout = ConnectionPool.ConnectionTimeout,
-                    SendTimeout = ConnectionPool.SendTimeout,
-                    ReceiveTimeout = ConnectionPool.ReceiveTimeout,
-                    StreamCopyBufferSize = ConnectionPool.StreamCopyBufferSize
-                },
+                ConnectionPool = pool != null
+                    ? new ConnectionPoolConfiguration
+                    {
+                        MaxConnectionPerServer = pool.MaxConnectionPerServer,
+                        MinConnectionPerServer = pool.MinConnectionPerServer,
+                        ConnectionIdleTimeout = pool.ConnectionIdleTimeout,
+                        ConnectionLifetime = pool.ConnectionLifetime,
+                        ConnectionTimeout = pool.ConnectionTimeout,
+                        SendTimeout = pool.SendTimeout,
+                        ReceiveTimeout = pool.ReceiveTimeout,
+                        StreamCopyBufferSize = pool.StreamCopyBufferSize
+                    }
+                    : new ConnectionPoolConfiguration(),
                 NetworkTimeout = NetworkTimeout,
                 Charset = Charset,
                 DefaultGroupName = DefaultGroupName,
@@ -162,6 +179,11 @@ namespace FastDFS.Client.Configuration
                     DefaultTokenExpireSeconds = HttpConfig.DefaultTokenExpireSeconds
                 } : null
             };
+        }
+
+        private ConnectionPoolConfiguration GetRequiredConnectionPool()
+        {
+            return ConnectionPool ?? throw new InvalidOperationException("ConnectionPool cannot be null. Call Validate() before using this configuration instance.");
         }
 
         private static string HashSensitiveValue(string? value)

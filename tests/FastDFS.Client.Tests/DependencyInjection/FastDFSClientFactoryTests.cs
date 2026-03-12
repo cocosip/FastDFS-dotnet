@@ -13,6 +13,29 @@ namespace FastDFS.Client.Tests.DependencyInjection
     public class FastDFSClientFactoryTests
     {
         [Fact]
+        public void GetClient_WithIdenticalConfigurations_ShouldReturnDistinctLogicalClientsWithOwnNames()
+        {
+            var sharedConfiguration = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration()
+            };
+
+            var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>
+            {
+                ["cluster-a"] = sharedConfiguration,
+                ["cluster-b"] = sharedConfiguration.Clone()
+            });
+
+            var clientA = factory.GetClient("cluster-a");
+            var clientB = factory.GetClient("cluster-b");
+
+            clientA.Should().NotBeSameAs(clientB);
+            clientA.Name.Should().Be("cluster-a");
+            clientB.Name.Should().Be("cluster-b");
+        }
+
+        [Fact]
         public void HasClient_WithConfiguredButNotYetCreatedClient_ShouldReturnTrue()
         {
             var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>
@@ -41,6 +64,53 @@ namespace FastDFS.Client.Tests.DependencyInjection
         }
 
         [Fact]
+        public void Validate_WithNullConnectionPool_ShouldThrowArgumentNullException()
+        {
+            var config = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = null!
+            };
+
+            var act = () => config.Validate();
+
+            act.Should().Throw<ArgumentNullException>()
+                .WithParameterName("ConnectionPool");
+        }
+
+        [Fact]
+        public void Validate_WithNonDefaultNetworkTimeout_ShouldThrowArgumentException()
+        {
+            var config = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration(),
+                NetworkTimeout = 15
+            };
+
+            var act = () => config.Validate();
+
+            act.Should().Throw<ArgumentException>()
+                .WithParameterName("NetworkTimeout");
+        }
+
+        [Fact]
+        public void Validate_WithNonUtf8Charset_ShouldThrowArgumentException()
+        {
+            var config = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration(),
+                Charset = "GBK"
+            };
+
+            var act = () => config.Validate();
+
+            act.Should().Throw<ArgumentException>()
+                .WithParameterName("Charset");
+        }
+
+        [Fact]
         public void GetConfigKey_ShouldIncludeStreamCopyBufferSize()
         {
             var configA = new FastDFSConfiguration
@@ -62,6 +132,28 @@ namespace FastDFS.Client.Tests.DependencyInjection
             };
 
             configA.GetConfigKey().Should().NotBe(configB.GetConfigKey());
+        }
+
+        [Fact]
+        public void GetConfigKey_ShouldIgnoreCompatibilityOnlyNetworkTimeoutAndCharset()
+        {
+            var configA = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration(),
+                NetworkTimeout = 30,
+                Charset = "UTF-8"
+            };
+
+            var configB = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration(),
+                NetworkTimeout = 30,
+                Charset = "utf-8"
+            };
+
+            configA.GetConfigKey().Should().Be(configB.GetConfigKey());
         }
 
         [Fact]
