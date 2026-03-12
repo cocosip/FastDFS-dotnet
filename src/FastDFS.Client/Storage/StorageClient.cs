@@ -84,6 +84,7 @@ namespace FastDFS.Client.Storage
         public async Task<string> UploadAsync(StorageServerInfo server, byte[] content, string fileExtension, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             return await pool.ExecuteAsync(async connection =>
@@ -106,6 +107,7 @@ namespace FastDFS.Client.Storage
         public async Task<string> UploadAsync(StorageServerInfo server, Stream contentStream, long contentLength, string fileExtension, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
             if (contentStream == null)
                 throw new ArgumentNullException(nameof(contentStream));
             if (!contentStream.CanRead)
@@ -143,6 +145,7 @@ namespace FastDFS.Client.Storage
         public async Task<string> UploadAppenderFileAsync(StorageServerInfo server, byte[] content, string fileExtension, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             return await pool.ExecuteAsync(async connection =>
@@ -171,6 +174,7 @@ namespace FastDFS.Client.Storage
         public async Task AppendFileAsync(StorageServerInfo server, string fileName, byte[] content, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             await pool.ExecuteAsync(async connection =>
@@ -200,6 +204,7 @@ namespace FastDFS.Client.Storage
         public async Task<byte[]> DownloadAsync(StorageServerInfo server, string groupName, string fileName, long offset, long length, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             return await pool.ExecuteAsync(async connection =>
@@ -223,6 +228,7 @@ namespace FastDFS.Client.Storage
         public async Task DownloadAsync(StorageServerInfo server, string groupName, string fileName, Stream destination, long offset, long length, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
             if (destination == null)
                 throw new ArgumentNullException(nameof(destination));
             if (!destination.CanWrite)
@@ -255,6 +261,7 @@ namespace FastDFS.Client.Storage
         public async Task DeleteAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             await pool.ExecuteAsync(async connection =>
@@ -282,6 +289,7 @@ namespace FastDFS.Client.Storage
         public async Task<FastDFSFileInfo> QueryFileInfoAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             return await pool.ExecuteAsync(async connection =>
@@ -311,6 +319,7 @@ namespace FastDFS.Client.Storage
         public async Task SetMetadataAsync(StorageServerInfo server, string groupName, string fileName, FastDFSMetadata metadata, MetadataFlag flag, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             await pool.ExecuteAsync(async connection =>
@@ -340,6 +349,7 @@ namespace FastDFS.Client.Storage
         public async Task<FastDFSMetadata> GetMetadataAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfServerIsNull(server);
 
             var pool = GetOrCreateStoragePool(server);
             return await pool.ExecuteAsync(async connection =>
@@ -359,6 +369,12 @@ namespace FastDFS.Client.Storage
         {
             var endpoint = new ConnectionEndpoint(server.IpAddress, server.Port);
             return _poolProvider.GetOrCreate(endpoint);
+        }
+
+        private static void ThrowIfServerIsNull(StorageServerInfo server)
+        {
+            if (server == null)
+                throw new ArgumentNullException(nameof(server));
         }
 
         private void ThrowIfDisposed()

@@ -1,5 +1,12 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Connection;
+using FastDFS.Client.Protocol;
+using FastDFS.Client.Storage;
+using FastDFS.Client.Tracker;
 using FluentAssertions;
 using Xunit;
 
@@ -187,6 +194,65 @@ namespace FastDFS.Client.Tests.Connection
             pool.TotalConnections.Should().Be(0);
             pool.IdleConnections.Should().Be(0);
             pool.ActiveConnections.Should().Be(0);
+        }
+
+        [Fact]
+        public void FastDFSClientManager_WithIdenticalConfigurations_ShouldReturnDistinctLogicalClientsWithOwnNames()
+        {
+            using var manager = new FastDFSClientManager();
+
+            var configuration = new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration()
+            };
+
+            manager.AddClient("cluster-a", configuration);
+            manager.AddClient("cluster-b", configuration.Clone());
+
+            var clientA = manager.GetClient("cluster-a");
+            var clientB = manager.GetClient("cluster-b");
+
+            clientA.Should().NotBeSameAs(clientB);
+            clientA.Name.Should().Be("cluster-a");
+            clientB.Name.Should().Be("cluster-b");
+        }
+
+        [Fact]
+        public void FastDFSClientManager_RemoveClient_ForLazyRegisteredClient_ShouldReturnTrue()
+        {
+            using var manager = new FastDFSClientManager();
+
+            manager.AddClient("lazy", new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration()
+            });
+
+            var removed = manager.RemoveClient("lazy");
+
+            removed.Should().BeTrue();
+            manager.HasClient("lazy").Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task StorageClient_ServerBasedApis_WithNullServer_ShouldThrowArgumentNullException()
+        {
+            using var client = new StorageClient(new ConnectionPoolConfiguration());
+            var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+            var writable = new MemoryStream();
+            var metadata = new FastDFSMetadata(new Dictionary<string, string> { ["k"] = "v" });
+
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.UploadAsync(null!, new byte[] { 1 }, "txt"));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.UploadAsync(null!, stream, stream.Length, "txt"));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.UploadAppenderFileAsync(null!, new byte[] { 1 }, "txt"));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.AppendFileAsync(null!, "file", new byte[] { 1 }));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.DownloadAsync(null!, "group1", "file", 0, 0));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.DownloadAsync(null!, "group1", "file", writable, 0, 0));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.DeleteAsync(null!, "group1", "file"));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.QueryFileInfoAsync(null!, "group1", "file"));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.SetMetadataAsync(null!, "group1", "file", metadata, MetadataFlag.Overwrite));
+            await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetMetadataAsync(null!, "group1", "file"));
         }
 
         // Note: Tests that require actual network connections are in integration tests

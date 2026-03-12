@@ -89,8 +89,7 @@ namespace FastDFS.Client.Connection
         /// <returns>A FastDFS connection.</returns>
         public async Task<FastDFSConnection> GetConnectionAsync(CancellationToken cancellationToken = default)
         {
-            if (Volatile.Read(ref _disposed) == 1)
-                throw new ObjectDisposedException(nameof(ConnectionPool));
+            ThrowIfDisposed();
 
             _logger.LogDebug("Requesting connection from pool {Host}:{Port} (Total={Total}, Idle={Idle}, Active={Active})",
                 _host, _port, _totalConnections, _idleConnections.Count, _activeConnections);
@@ -134,6 +133,8 @@ namespace FastDFS.Client.Connection
 
             try
             {
+                ThrowIfDisposed();
+
                 // Create a new connection
                 _logger.LogDebug("Creating new connection to {Host}:{Port}", _host, _port);
                 var newConnection = await CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -416,6 +417,12 @@ namespace FastDFS.Client.Connection
             {
                 // Suppress exceptions during disposal
             }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+                throw new ObjectDisposedException(nameof(ConnectionPool));
         }
 
         /// <summary>

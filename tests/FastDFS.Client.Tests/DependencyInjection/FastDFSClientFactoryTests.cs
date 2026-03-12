@@ -3,7 +3,6 @@ using FastDFS.Client.Configuration;
 using FastDFS.Client.Connection;
 using FastDFS.Client.DependencyInjection;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;

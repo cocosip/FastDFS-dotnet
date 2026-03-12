@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Connection;
 using FastDFS.Client.Storage;
 using FastDFS.Client.Tracker;
 
@@ -65,20 +66,20 @@ namespace FastDFS.Client
 
     /// <summary>
     /// Manager for multiple FastDFS client instances in non-DI scenarios.
-    /// Clients with identical configurations share the same underlying connection pool.
+    /// Clients with identical configurations share the same underlying connection pool resources.
     /// </summary>
     public class FastDFSClientManager : IFastDFSClientFactory, IDisposable
     {
         // name -> config (for lazy creation via AddClient)
         private readonly ConcurrentDictionary<string, FastDFSConfiguration> _options = new();
 
-        // name -> client instance (multiple names may point to the same physical instance)
+        // name -> logical client instance
         private readonly ConcurrentDictionary<string, IFastDFSClient> _clients = new();
 
-        // Shared physical clients keyed by config fingerprint
-        private readonly ConcurrentDictionary<string, IFastDFSClient> _sharedClients = new();
-        private readonly ConcurrentDictionary<string, int> _sharedRefCounts = new();
-        private readonly ConcurrentDictionary<string, string> _nameToConfigKey = new();
+        // Shared connection pool resources keyed by config fingerprint (protected by _lock)
+        private readonly Dictionary<string, SharedClientResources> _sharedResources = new();
+        private readonly Dictionary<string, int> _sharedRefCounts = new();
+        private readonly Dictionary<string, string> _nameToConfigKey = new();
 
         private readonly object _lock = new object();
         private int _disposed; // 0 = false, 1 = true; use Interlocked for thread-safe dispose
@@ -92,6 +93,7 @@ namespace FastDFS.Client
 
         /// <summary>
         /// Adds a named client configuration. The client will be created lazily on first access.
+        /// If the client already exists, it will be replaced.
         /// </summary>
         public void AddClient(string name, FastDFSConfiguration options)
         {
@@ -101,10 +103,15 @@ namespace FastDFS.Client
                 throw new ArgumentNullException(nameof(options));
 
             ThrowIfDisposed();
+            options.Validate();
 
             lock (_lock)
             {
-                options.Validate();
+                ThrowIfDisposed();
+
+                if (_options.ContainsKey(name) || _clients.ContainsKey(name))
+                    RemoveClientInternal(name);
+
                 _options[name] = options;
             }
         }
@@ -141,15 +148,11 @@ namespace FastDFS.Client
 
             ThrowIfDisposed();
 
-            // Fast path: try to get existing client without lock
-            if (_clients.TryGetValue(name, out var existingClient))
-                return existingClient;
-
-            // Slow path: create new client with lock
             lock (_lock)
             {
-                // Double-check after acquiring lock
-                if (_clients.TryGetValue(name, out existingClient))
+                ThrowIfDisposed();
+
+                if (_clients.TryGetValue(name, out var existingClient))
                     return existingClient;
 
                 if (!_options.TryGetValue(name, out var options))
@@ -169,7 +172,12 @@ namespace FastDFS.Client
 
             lock (_lock)
             {
-                return _options.Keys.ToList();
+                ThrowIfDisposed();
+
+                return _options.Keys
+                    .Concat(_clients.Keys)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
             }
         }
 
@@ -183,7 +191,8 @@ namespace FastDFS.Client
 
             lock (_lock)
             {
-                return _options.ContainsKey(name);
+                ThrowIfDisposed();
+                return _options.ContainsKey(name) || _clients.ContainsKey(name);
             }
         }
 
@@ -196,12 +205,13 @@ namespace FastDFS.Client
                 throw new ArgumentNullException(nameof(configuration));
 
             ThrowIfDisposed();
-
             configuration.Validate();
 
             lock (_lock)
             {
-                if (_clients.ContainsKey(name))
+                ThrowIfDisposed();
+
+                if (_options.ContainsKey(name) || _clients.ContainsKey(name))
                     RemoveClientInternal(name);
 
                 _options[name] = configuration;
@@ -222,58 +232,83 @@ namespace FastDFS.Client
 
             lock (_lock)
             {
+                ThrowIfDisposed();
                 return RemoveClientInternal(name);
             }
         }
 
         /// <summary>
-        /// Returns an existing shared physical client if one with the same configuration exists,
-        /// otherwise creates a new one. Must be called within <see cref="_lock"/>.
+        /// Creates a logical named client backed by shared connection pool resources when the
+        /// configuration fingerprint matches an existing registration. Must be called within <see cref="_lock"/>.
         /// </summary>
         private IFastDFSClient GetOrCreateSharedClient(string name, FastDFSConfiguration configuration)
         {
             var configKey = configuration.GetConfigKey();
 
-            if (_sharedClients.TryGetValue(configKey, out var existing))
+            if (!_sharedResources.TryGetValue(configKey, out var sharedResources))
             {
-                _nameToConfigKey[name] = configKey;
-                _sharedRefCounts[configKey]++;
-                return existing;
+                sharedResources = new SharedClientResources(new ConnectionPoolProvider(configuration.ConnectionPool));
+                _sharedResources[configKey] = sharedResources;
+                _sharedRefCounts[configKey] = 0;
             }
 
-            var client = FastDFSClientBuilder.CreateClient(configuration, name);
-            _sharedClients[configKey] = client;
-            _sharedRefCounts[configKey] = 1;
             _nameToConfigKey[name] = configKey;
-            return client;
+            _sharedRefCounts[configKey]++;
+
+            var trackerClient = new TrackerClient(configuration.TrackerServers, sharedResources.PoolProvider);
+            var storageClient = new StorageClient(sharedResources.PoolProvider, configuration.ConnectionPool.StreamCopyBufferSize);
+            return new FastDFSClient(
+                trackerClient,
+                storageClient,
+                name,
+                configuration.DefaultGroupName,
+                configuration.StorageSelectionStrategy,
+                configuration.HttpConfig);
         }
 
         /// <summary>
-        /// Removes a client by name and decrements the shared ref count,
-        /// disposing the physical client only when the last reference is removed.
+        /// Removes a client by name and decrements the shared reference count,
+        /// disposing the shared pool resources only when the last reference is removed.
         /// Must be called within <see cref="_lock"/>.
         /// </summary>
         private bool RemoveClientInternal(string name)
         {
-            if (!_clients.TryRemove(name, out _))
+            var removedClient = _clients.TryRemove(name, out var client);
+            var removedConfiguration = _options.TryRemove(name, out _);
+
+            if (!removedClient && !removedConfiguration)
                 return false;
 
-            _options.TryRemove(name, out _);
-
-            if (_nameToConfigKey.TryRemove(name, out var configKey))
+            try
             {
-                if (_sharedRefCounts.TryRemove(configKey, out var refCount) && refCount <= 1)
+                (client as IDisposable)?.Dispose();
+            }
+            catch
+            {
+                // Suppress exceptions during disposal
+            }
+
+            if (_nameToConfigKey.TryGetValue(name, out var configKey))
+            {
+                _nameToConfigKey.Remove(name);
+
+                var refCount = --_sharedRefCounts[configKey];
+                if (refCount <= 0)
                 {
-                    if (_sharedClients.TryRemove(configKey, out var client))
+                    _sharedRefCounts.Remove(configKey);
+
+                    if (_sharedResources.TryGetValue(configKey, out var sharedResources))
                     {
-                        try { (client as IDisposable)?.Dispose(); }
-                        catch { }
+                        _sharedResources.Remove(configKey);
+                        try
+                        {
+                            sharedResources.Dispose();
+                        }
+                        catch
+                        {
+                            // Suppress exceptions during disposal
+                        }
                     }
-                }
-                else if (refCount > 1)
-                {
-                    // Decrement ref count
-                    _sharedRefCounts[configKey] = refCount - 1;
                 }
             }
 
@@ -294,13 +329,19 @@ namespace FastDFS.Client
 
             lock (_lock)
             {
-                foreach (var client in _sharedClients.Values)
+                foreach (var client in _clients.Values)
                 {
                     try { (client as IDisposable)?.Dispose(); }
                     catch { }
                 }
 
-                _sharedClients.Clear();
+                foreach (var sharedResources in _sharedResources.Values)
+                {
+                    try { sharedResources.Dispose(); }
+                    catch { }
+                }
+
+                _sharedResources.Clear();
                 _sharedRefCounts.Clear();
                 _nameToConfigKey.Clear();
                 _clients.Clear();
@@ -308,6 +349,21 @@ namespace FastDFS.Client
             }
 
             GC.SuppressFinalize(this);
+        }
+
+        private sealed class SharedClientResources : IDisposable
+        {
+            public SharedClientResources(IConnectionPoolProvider poolProvider)
+            {
+                PoolProvider = poolProvider ?? throw new ArgumentNullException(nameof(poolProvider));
+            }
+
+            public IConnectionPoolProvider PoolProvider { get; }
+
+            public void Dispose()
+            {
+                PoolProvider.Dispose();
+            }
         }
     }
 }
