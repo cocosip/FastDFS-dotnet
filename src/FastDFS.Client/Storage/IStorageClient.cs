@@ -29,6 +29,17 @@ namespace FastDFS.Client.Storage
         Task<string> UploadAsync(StorageServerInfo server, byte[] content, string fileExtension, CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Uploads a file from a readable stream to the specified storage server without buffering the entire payload in memory.
+        /// </summary>
+        /// <param name="server">The storage server information obtained from the tracker.</param>
+        /// <param name="contentStream">The readable stream containing the file content.</param>
+        /// <param name="contentLength">The total length of the stream content in bytes.</param>
+        /// <param name="fileExtension">The file extension without the leading dot (e.g., "jpg", "txt").</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>The file ID in the format "group_name/filename".</returns>
+        Task<string> UploadAsync(StorageServerInfo server, Stream contentStream, long contentLength, string fileExtension, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Uploads an appender file from a byte array to the specified storage server.
         /// Appender files support appending data after the initial upload.
         /// </summary>
@@ -65,6 +76,18 @@ namespace FastDFS.Client.Storage
         /// <exception cref="ObjectDisposedException">Thrown when the storage client has been disposed.</exception>
         /// <exception cref="FastDFSException">Thrown when the download operation fails.</exception>
         Task<byte[]> DownloadAsync(StorageServerInfo server, string groupName, string fileName, long offset, long length, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Downloads a portion of a file from the specified storage server directly into the destination stream.
+        /// </summary>
+        /// <param name="server">The storage server information obtained from the tracker.</param>
+        /// <param name="groupName">The name of the storage group where the file is located.</param>
+        /// <param name="fileName">The name of the file to download.</param>
+        /// <param name="destination">The writable destination stream.</param>
+        /// <param name="offset">The byte offset from which to start downloading. Use 0 to start from the beginning.</param>
+        /// <param name="length">The number of bytes to download. Use 0 to download the entire file.</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        Task DownloadAsync(StorageServerInfo server, string groupName, string fileName, Stream destination, long offset, long length, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Deletes a file from the specified storage server.

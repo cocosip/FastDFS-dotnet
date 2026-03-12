@@ -15,11 +15,8 @@ namespace FastDFS.Client.Utilities
         /// <returns>Big-endian byte array.</returns>
         public static byte[] ToBytes(long value)
         {
-            var bytes = BitConverter.GetBytes(value);
-            if (BitConverter.IsLittleEndian)
-            {
-                Array.Reverse(bytes);
-            }
+            var bytes = new byte[8];
+            WriteInt64(value, bytes, 0);
             return bytes;
         }
 
@@ -30,11 +27,8 @@ namespace FastDFS.Client.Utilities
         /// <returns>Big-endian byte array.</returns>
         public static byte[] ToBytes(int value)
         {
-            var bytes = BitConverter.GetBytes(value);
-            if (BitConverter.IsLittleEndian)
-            {
-                Array.Reverse(bytes);
-            }
+            var bytes = new byte[4];
+            WriteInt32(value, bytes, 0);
             return bytes;
         }
 
@@ -51,17 +45,16 @@ namespace FastDFS.Client.Utilities
             if (bytes.Length < offset + 8)
                 throw new ArgumentException("Byte array is too short for Int64 conversion.", nameof(bytes));
 
-            if (BitConverter.IsLittleEndian)
+            unchecked
             {
-                // Need to reverse for big-endian to little-endian conversion
-                var temp = new byte[8];
-                Array.Copy(bytes, offset, temp, 0, 8);
-                Array.Reverse(temp);
-                return BitConverter.ToInt64(temp, 0);
-            }
-            else
-            {
-                return BitConverter.ToInt64(bytes, offset);
+                return ((long)bytes[offset] << 56)
+                    | ((long)bytes[offset + 1] << 48)
+                    | ((long)bytes[offset + 2] << 40)
+                    | ((long)bytes[offset + 3] << 32)
+                    | ((long)bytes[offset + 4] << 24)
+                    | ((long)bytes[offset + 5] << 16)
+                    | ((long)bytes[offset + 6] << 8)
+                    | bytes[offset + 7];
             }
         }
 
@@ -78,17 +71,12 @@ namespace FastDFS.Client.Utilities
             if (bytes.Length < offset + 4)
                 throw new ArgumentException("Byte array is too short for Int32 conversion.", nameof(bytes));
 
-            if (BitConverter.IsLittleEndian)
+            unchecked
             {
-                // Need to reverse for big-endian to little-endian conversion
-                var temp = new byte[4];
-                Array.Copy(bytes, offset, temp, 0, 4);
-                Array.Reverse(temp);
-                return BitConverter.ToInt32(temp, 0);
-            }
-            else
-            {
-                return BitConverter.ToInt32(bytes, offset);
+                return (bytes[offset] << 24)
+                    | (bytes[offset + 1] << 16)
+                    | (bytes[offset + 2] << 8)
+                    | bytes[offset + 3];
             }
         }
 
@@ -105,8 +93,17 @@ namespace FastDFS.Client.Utilities
             if (buffer.Length < offset + 8)
                 throw new ArgumentException("Buffer is too short.", nameof(buffer));
 
-            var bytes = ToBytes(value);
-            Array.Copy(bytes, 0, buffer, offset, 8);
+            unchecked
+            {
+                buffer[offset] = (byte)(value >> 56);
+                buffer[offset + 1] = (byte)(value >> 48);
+                buffer[offset + 2] = (byte)(value >> 40);
+                buffer[offset + 3] = (byte)(value >> 32);
+                buffer[offset + 4] = (byte)(value >> 24);
+                buffer[offset + 5] = (byte)(value >> 16);
+                buffer[offset + 6] = (byte)(value >> 8);
+                buffer[offset + 7] = (byte)value;
+            }
         }
 
         /// <summary>
@@ -122,8 +119,13 @@ namespace FastDFS.Client.Utilities
             if (buffer.Length < offset + 4)
                 throw new ArgumentException("Buffer is too short.", nameof(buffer));
 
-            var bytes = ToBytes(value);
-            Array.Copy(bytes, 0, buffer, offset, 4);
+            unchecked
+            {
+                buffer[offset] = (byte)(value >> 24);
+                buffer[offset + 1] = (byte)(value >> 16);
+                buffer[offset + 2] = (byte)(value >> 8);
+                buffer[offset + 3] = (byte)value;
+            }
         }
     }
 }

@@ -180,10 +180,24 @@ namespace FastDFS.Client
                 throw new ArgumentNullException(nameof(stream));
             if (!stream.CanRead)
                 throw new ArgumentException("Stream must be readable.", nameof(stream));
+            if (!stream.CanSeek)
+                throw new ArgumentException("Stream must support seeking so the content length can be determined without buffering.", nameof(stream));
 
-            using var memoryStream = new MemoryStream();
-            await stream.CopyToAsync(memoryStream, _streamCopyBufferSize, cancellationToken).ConfigureAwait(false);
-            return await UploadAsync(groupName, memoryStream.ToArray(), fileExtension, cancellationToken).ConfigureAwait(false);
+            long originalPosition = stream.Position;
+            long contentLength = stream.Length - originalPosition;
+            if (contentLength <= 0)
+                throw new ArgumentException("Stream content cannot be empty.", nameof(stream));
+            if (string.IsNullOrEmpty(fileExtension))
+                throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
+
+            _logger.LogInformation("Uploading stream to group '{GroupName}', size={Size} bytes, extension={Extension}",
+                groupName ?? "(auto-select)", contentLength, fileExtension);
+
+            var server = await SelectStorageForUploadAsync(groupName, cancellationToken).ConfigureAwait(false);
+            var fileId = await _storageClient.UploadAsync(server, stream, contentLength, fileExtension, cancellationToken).ConfigureAwait(false);
+
+            _logger.LogInformation("Successfully uploaded file: {FileId}", fileId);
+            return fileId;
         }
 
         /// <summary>
@@ -209,16 +223,9 @@ namespace FastDFS.Client
             if (!File.Exists(localFilePath))
                 throw new FileNotFoundException("Local file not found.", localFilePath);
 
-            byte[] content;
-            using (var fileStream = File.OpenRead(localFilePath))
-            using (var memoryStream = new MemoryStream())
-            {
-                await fileStream.CopyToAsync(memoryStream, _streamCopyBufferSize, cancellationToken).ConfigureAwait(false);
-                content = memoryStream.ToArray();
-            }
-
             var fileExtension = Path.GetExtension(localFilePath).TrimStart('.');
-            return await UploadAsync(groupName, content, fileExtension, cancellationToken).ConfigureAwait(false);
+            using var fileStream = File.OpenRead(localFilePath);
+            return await UploadAsync(groupName, fileStream, fileExtension, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -309,8 +316,8 @@ namespace FastDFS.Client
         {
             ThrowIfDisposed();
             if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
-            var content = await DownloadAsync(fileId, cancellationToken).ConfigureAwait(false);
-            await outputStream.WriteAsync(content, 0, content.Length, cancellationToken).ConfigureAwait(false);
+            ParseFileIdWithDefault(fileId, out string groupName, out string fileName);
+            await DownloadAsync(groupName, fileName, outputStream, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -333,8 +340,12 @@ namespace FastDFS.Client
         {
             ThrowIfDisposed();
             if (outputStream == null) throw new ArgumentNullException(nameof(outputStream));
-            var content = await DownloadAsync(groupName, fileName, cancellationToken).ConfigureAwait(false);
-            await outputStream.WriteAsync(content, 0, content.Length, cancellationToken).ConfigureAwait(false);
+            ResolveGroupAndFileName(ref groupName, ref fileName);
+            ValidateGroupAndFileName(groupName, fileName);
+            if (!outputStream.CanWrite)
+                throw new ArgumentException("Output stream must be writable.", nameof(outputStream));
+
+            await DownloadCoreToStreamAsync(groupName!, fileName, outputStream, 0, 0, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -356,8 +367,8 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(localFilePath))
                 throw new ArgumentException("Local file path cannot be null or empty.", nameof(localFilePath));
 
-            var content = await DownloadAsync(fileId, cancellationToken).ConfigureAwait(false);
-            await WriteToFileAsync(content, localFilePath, cancellationToken).ConfigureAwait(false);
+            using var fileStream = CreateFileStream(localFilePath);
+            await DownloadAsync(fileId, fileStream, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -381,8 +392,8 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(localFilePath))
                 throw new ArgumentException("Local file path cannot be null or empty.", nameof(localFilePath));
 
-            var content = await DownloadAsync(groupName, fileName, cancellationToken).ConfigureAwait(false);
-            await WriteToFileAsync(content, localFilePath, cancellationToken).ConfigureAwait(false);
+            using var fileStream = CreateFileStream(localFilePath);
+            await DownloadAsync(groupName, fileName, fileStream, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -444,11 +455,23 @@ namespace FastDFS.Client
             long length,
             CancellationToken cancellationToken)
         {
+            using var memoryStream = new MemoryStream();
+            await DownloadCoreToStreamAsync(groupName, fileName, memoryStream, offset, length, cancellationToken).ConfigureAwait(false);
+            return memoryStream.ToArray();
+        }
+
+        private async Task DownloadCoreToStreamAsync(
+            string groupName,
+            string fileName,
+            Stream outputStream,
+            long offset,
+            long length,
+            CancellationToken cancellationToken)
+        {
             _logger.LogInformation("Downloading file: group={GroupName}, file={FileName}", groupName, fileName);
             var server = await SelectStorageForDownloadAsync(groupName, fileName, cancellationToken).ConfigureAwait(false);
-            var content = await _storageClient.DownloadAsync(server, groupName, fileName, offset, length, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Successfully downloaded file: group={GroupName}, file={FileName}, size={Size} bytes", groupName, fileName, content.Length);
-            return content;
+            await _storageClient.DownloadAsync(server, groupName, fileName, outputStream, offset, length, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Successfully downloaded file to stream: group={GroupName}, file={FileName}", groupName, fileName);
         }
 
         // ==================== Append Operations ====================
@@ -995,14 +1018,13 @@ namespace FastDFS.Client
                 throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
         }
 
-        private static async Task WriteToFileAsync(byte[] content, string localFilePath, CancellationToken cancellationToken)
+        private static FileStream CreateFileStream(string localFilePath)
         {
             var directory = Path.GetDirectoryName(localFilePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            using var fileStream = File.Create(localFilePath);
-            await fileStream.WriteAsync(content, 0, content.Length, cancellationToken).ConfigureAwait(false);
+            return File.Create(localFilePath);
         }
 
         private void EnsureHttpConfig()
@@ -1032,17 +1054,15 @@ namespace FastDFS.Client
             GC.SuppressFinalize(this);
         }
 
-        /// <summary>
-        /// Finalizer — ensures TCP connections are released even if Dispose() is never called.
-        /// </summary>
-        ~FastDFSClient() => Dispose(disposing: false);
-
         private void Dispose(bool disposing)
         {
             if (_disposed)
                 return;
 
             _disposed = true;
+
+            if (!disposing)
+                return;
 
             try { (_trackerClient as IDisposable)?.Dispose(); } catch { }
             try { (_storageClient as IDisposable)?.Dispose(); } catch { }

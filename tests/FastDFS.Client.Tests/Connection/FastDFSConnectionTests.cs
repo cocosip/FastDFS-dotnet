@@ -161,6 +161,13 @@ namespace FastDFS.Client.Tests.Connection
                 async () => await connection.ConnectAsync());
         }
 
+        [Fact]
+        public void IsPoisoned_ShouldBeFalseByDefault()
+        {
+            using var connection = new FastDFSConnection("localhost", 22122);
+            connection.IsPoisoned.Should().BeFalse();
+        }
+
         // Note: Actual connection tests require a running FastDFS server
         // and are placed in integration tests
     }

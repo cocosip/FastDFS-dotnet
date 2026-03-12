@@ -112,7 +112,14 @@ namespace FastDFS.Client.DependencyInjection
         public IEnumerable<string> GetClientNames()
         {
             ThrowIfDisposed();
-            return _clients.Keys.ToList();
+
+            lock (_lock)
+            {
+                return _runtimeConfigurations.Keys
+                    .Concat(_clients.Keys)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+            }
         }
 
         /// <inheritdoc/>
@@ -122,7 +129,19 @@ namespace FastDFS.Client.DependencyInjection
                 return false;
 
             ThrowIfDisposed();
-            return _clients.ContainsKey(name);
+
+            if (_runtimeConfigurations.ContainsKey(name) || _clients.ContainsKey(name))
+                return true;
+
+            try
+            {
+                var options = _optionsMonitor.Get(name);
+                return options?.TrackerServers != null && options.TrackerServers.Count > 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <inheritdoc/>

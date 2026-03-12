@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
+using FastDFS.Client.Exceptions;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
 
@@ -34,97 +36,76 @@ namespace FastDFS.Client.Protocol.Responses
                 return;
             }
 
-            // Calculate number of servers
+            if (body.Length % ServerInfoBlockSize != 0)
+            {
+                throw new FastDFSProtocolException(
+                    $"Invalid storage server list response length {body.Length.ToString(CultureInfo.InvariantCulture)}. Expected a multiple of {ServerInfoBlockSize.ToString(CultureInfo.InvariantCulture)} bytes.");
+            }
+
             int serverCount = body.Length / ServerInfoBlockSize;
             Servers = new List<StorageServerDetail>(serverCount);
 
             for (int i = 0; i < serverCount; i++)
             {
                 int offset = i * ServerInfoBlockSize;
+                Servers.Add(ParseServer(body, offset, i));
+            }
+        }
 
-                try
+        private static StorageServerDetail ParseServer(byte[] body, int offset, int index)
+        {
+            try
+            {
+                var joinTime = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 167));
+                var lastHeartbeatTime = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 175));
+                var lastSourceUpdate = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 375));
+                var lastSyncUpdate = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 383));
+
+                var server = new StorageServerDetail
                 {
-                    var server = new StorageServerDetail
-                    {
-                        // Server status (1 byte)
-                        Status = (StorageServerStatus)body[offset],
+                    Status = (StorageServerStatus)body[offset],
+                    Id = body.ReadFixedString(offset + 1, 16, Encoding.UTF8).TrimEnd('\0'),
+                    SourceIpAddress = body.ReadFixedString(offset + 17, 16, Encoding.UTF8).TrimEnd('\0'),
+                    DomainName = body.ReadFixedString(offset + 33, 128, Encoding.UTF8).TrimEnd('\0'),
+                    Version = body.ReadFixedString(offset + 161, 6, Encoding.UTF8).TrimEnd('\0'),
+                    JoinTime = joinTime.UtcDateTime,
+                    LastHeartbeatTime = lastHeartbeatTime.UtcDateTime,
+                    TotalMB = ByteConverter.ToInt64(body, offset + 183),
+                    FreeMB = ByteConverter.ToInt64(body, offset + 191),
+                    UploadPriority = checked((int)ByteConverter.ToInt64(body, offset + 199)),
+                    StorePathCount = checked((int)ByteConverter.ToInt64(body, offset + 207)),
+                    SubdirCountPerPath = checked((int)ByteConverter.ToInt64(body, offset + 215)),
+                    CurrentWritePath = checked((int)ByteConverter.ToInt64(body, offset + 223)),
+                    StoragePort = checked((int)ByteConverter.ToInt64(body, offset + 231)),
+                    StorageHttpPort = checked((int)ByteConverter.ToInt64(body, offset + 239)),
+                    TotalUploadCount = ByteConverter.ToInt64(body, offset + 247),
+                    SuccessUploadCount = ByteConverter.ToInt64(body, offset + 255),
+                    TotalAppendCount = ByteConverter.ToInt64(body, offset + 263),
+                    SuccessAppendCount = ByteConverter.ToInt64(body, offset + 271),
+                    TotalModifyCount = ByteConverter.ToInt64(body, offset + 279),
+                    SuccessModifyCount = ByteConverter.ToInt64(body, offset + 287),
+                    TotalTruncateCount = ByteConverter.ToInt64(body, offset + 295),
+                    SuccessTruncateCount = ByteConverter.ToInt64(body, offset + 303),
+                    TotalSetMetadataCount = ByteConverter.ToInt64(body, offset + 311),
+                    SuccessSetMetadataCount = ByteConverter.ToInt64(body, offset + 319),
+                    TotalDeleteCount = ByteConverter.ToInt64(body, offset + 327),
+                    SuccessDeleteCount = ByteConverter.ToInt64(body, offset + 335),
+                    TotalDownloadCount = ByteConverter.ToInt64(body, offset + 343),
+                    SuccessDownloadCount = ByteConverter.ToInt64(body, offset + 351),
+                    TotalGetMetadataCount = ByteConverter.ToInt64(body, offset + 359),
+                    SuccessGetMetadataCount = ByteConverter.ToInt64(body, offset + 367),
+                    LastSourceUpdate = lastSourceUpdate.UtcDateTime,
+                    LastSyncUpdate = lastSyncUpdate.UtcDateTime
+                };
 
-                        // Server ID/IP address (16 bytes, FDFS_IPADDR_SIZE)
-                        Id = body.ReadFixedString(offset + 1, 16, Encoding.UTF8).TrimEnd('\0'),
-
-                        // Source IP address (16 bytes)
-                        SourceIpAddress = body.ReadFixedString(offset + 17, 16, Encoding.UTF8).TrimEnd('\0'),
-
-                        // Domain name (128 bytes, FDFS_DOMAIN_NAME_MAX_SIZE)
-                        DomainName = body.ReadFixedString(offset + 33, 128, Encoding.UTF8).TrimEnd('\0'),
-
-                        // Version (6 bytes)
-                        Version = body.ReadFixedString(offset + 161, 6, Encoding.UTF8).TrimEnd('\0'),
-
-                        // Join time (8 bytes, timestamp)
-                        JoinTime = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 167)).DateTime,
-
-                        // Last heartbeat time (8 bytes, timestamp)
-                        LastHeartbeatTime = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 175)).DateTime,
-
-                        // Total disk space (8 bytes, MB)
-                        TotalMB = ByteConverter.ToInt64(body, offset + 183),
-
-                        // Free disk space (8 bytes, MB)
-                        FreeMB = ByteConverter.ToInt64(body, offset + 191),
-
-                        // Upload priority (8 bytes)
-                        UploadPriority = (int)ByteConverter.ToInt64(body, offset + 199),
-
-                        // Store path count (8 bytes)
-                        StorePathCount = (int)ByteConverter.ToInt64(body, offset + 207),
-
-                        // Subdir count per path (8 bytes)
-                        SubdirCountPerPath = (int)ByteConverter.ToInt64(body, offset + 215),
-
-                        // Current write path (8 bytes)
-                        CurrentWritePath = (int)ByteConverter.ToInt64(body, offset + 223),
-
-                        // Storage port (8 bytes)
-                        StoragePort = (int)ByteConverter.ToInt64(body, offset + 231),
-
-                        // Storage HTTP port (8 bytes)
-                        StorageHttpPort = (int)ByteConverter.ToInt64(body, offset + 239),
-
-                        // Statistics counters (each 8 bytes)
-                        TotalUploadCount = ByteConverter.ToInt64(body, offset + 247),
-                        SuccessUploadCount = ByteConverter.ToInt64(body, offset + 255),
-                        TotalAppendCount = ByteConverter.ToInt64(body, offset + 263),
-                        SuccessAppendCount = ByteConverter.ToInt64(body, offset + 271),
-                        TotalModifyCount = ByteConverter.ToInt64(body, offset + 279),
-                        SuccessModifyCount = ByteConverter.ToInt64(body, offset + 287),
-                        TotalTruncateCount = ByteConverter.ToInt64(body, offset + 295),
-                        SuccessTruncateCount = ByteConverter.ToInt64(body, offset + 303),
-                        TotalSetMetadataCount = ByteConverter.ToInt64(body, offset + 311),
-                        SuccessSetMetadataCount = ByteConverter.ToInt64(body, offset + 319),
-                        TotalDeleteCount = ByteConverter.ToInt64(body, offset + 327),
-                        SuccessDeleteCount = ByteConverter.ToInt64(body, offset + 335),
-                        TotalDownloadCount = ByteConverter.ToInt64(body, offset + 343),
-                        SuccessDownloadCount = ByteConverter.ToInt64(body, offset + 351),
-                        TotalGetMetadataCount = ByteConverter.ToInt64(body, offset + 359),
-                        SuccessGetMetadataCount = ByteConverter.ToInt64(body, offset + 367),
-
-                        // Last sync timestamps (each 8 bytes)
-                        LastSourceUpdate = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 375)).DateTime,
-                        LastSyncUpdate = DateTimeOffset.FromUnixTimeSeconds(ByteConverter.ToInt64(body, offset + 383)).DateTime
-                    };
-
-                    // Set IpAddress same as Id for backward compatibility
-                    server.IpAddress = server.Id;
-
-                    Servers.Add(server);
-                }
-                catch (Exception)
-                {
-                    // If we can't parse a server info block, stop processing
-                    // This might happen if the protocol format is different than expected
-                    break;
-                }
+                server.IpAddress = server.Id;
+                return server;
+            }
+            catch (Exception ex)
+            {
+                throw new FastDFSProtocolException(
+                    $"Failed to parse storage server detail block at index {index.ToString(CultureInfo.InvariantCulture)} (offset {offset.ToString(CultureInfo.InvariantCulture)}).",
+                    ex);
             }
         }
     }

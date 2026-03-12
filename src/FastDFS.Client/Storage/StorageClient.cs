@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
@@ -79,6 +80,35 @@ namespace FastDFS.Client.Storage
                 };
 
                 var response = await connection.SendRequestAsync<UploadFileRequest, UploadFileResponse>(request, cancellationToken).ConfigureAwait(false);
+                return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Uploads a file from a readable stream to the specified storage server.
+        /// </summary>
+        public async Task<string> UploadAsync(StorageServerInfo server, Stream contentStream, long contentLength, string fileExtension, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (contentStream == null)
+                throw new ArgumentNullException(nameof(contentStream));
+            if (!contentStream.CanRead)
+                throw new ArgumentException("Content stream must be readable.", nameof(contentStream));
+            if (contentLength < 0)
+                throw new ArgumentOutOfRangeException(nameof(contentLength), "Content length cannot be negative.");
+
+            var pool = GetOrCreateStoragePool(server);
+            return await pool.ExecuteAsync(async connection =>
+            {
+                var response = await connection.SendUploadRequestAsync(
+                    StorageCommand.UploadFile,
+                    server.StorePathIndex,
+                    contentStream,
+                    contentLength,
+                    fileExtension,
+                    81920,
+                    cancellationToken).ConfigureAwait(false);
+
                 return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
             }, cancellationToken).ConfigureAwait(false);
         }
@@ -168,6 +198,32 @@ namespace FastDFS.Client.Storage
 
                 var response = await connection.SendRequestAsync<DownloadFileRequest, DownloadFileResponse>(request, cancellationToken).ConfigureAwait(false);
                 return response.Content;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Downloads a portion of a file from the specified storage server directly into the destination stream.
+        /// </summary>
+        public async Task DownloadAsync(StorageServerInfo server, string groupName, string fileName, Stream destination, long offset, long length, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (destination == null)
+                throw new ArgumentNullException(nameof(destination));
+            if (!destination.CanWrite)
+                throw new ArgumentException("Destination stream must be writable.", nameof(destination));
+
+            var pool = GetOrCreateStoragePool(server);
+            await pool.ExecuteAsync(async connection =>
+            {
+                var request = new DownloadFileRequest
+                {
+                    GroupName = groupName,
+                    FileName = fileName,
+                    FileOffset = offset,
+                    DownloadBytes = length
+                };
+
+                await connection.DownloadToStreamAsync(request, destination, 81920, cancellationToken).ConfigureAwait(false);
             }, cancellationToken).ConfigureAwait(false);
         }
 

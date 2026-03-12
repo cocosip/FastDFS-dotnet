@@ -17,6 +17,7 @@ namespace FastDFS.Client.Connection
         private readonly int _port;
         private readonly ConnectionPoolConfiguration _options;
         private readonly ConcurrentQueue<FastDFSConnection> _idleConnections;
+        private readonly ConcurrentDictionary<FastDFSConnection, byte> _leasedConnections;
         private readonly SemaphoreSlim _connectionSemaphore;
         private readonly Timer _cleanupTimer;
         private readonly CancellationTokenSource _disposeCts;
@@ -64,6 +65,7 @@ namespace FastDFS.Client.Connection
             _options = options;
             _logger = logger ?? NullLogger<ConnectionPool>.Instance;
             _idleConnections = new ConcurrentQueue<FastDFSConnection>();
+            _leasedConnections = new ConcurrentDictionary<FastDFSConnection, byte>();
             _connectionSemaphore = new SemaphoreSlim(_options.MaxConnectionPerServer, _options.MaxConnectionPerServer);
             _disposeCts = new CancellationTokenSource();
             _totalConnections = 0;
@@ -99,6 +101,13 @@ namespace FastDFS.Client.Connection
             {
                 if (IsConnectionValid(connection, deepCheck: true))
                 {
+                    if (!_leasedConnections.TryAdd(connection, 0))
+                    {
+                        _logger.LogError("Connection lease tracking conflict detected for pool {Host}:{Port}; disposing conflicted connection.", _host, _port);
+                        DisposeConnection(connection);
+                        continue;
+                    }
+
                     Interlocked.Increment(ref _activeConnections);
                     _logger.LogDebug("Reused idle connection from pool {Host}:{Port}", _host, _port);
                     return connection;
@@ -127,6 +136,13 @@ namespace FastDFS.Client.Connection
                 // Create a new connection
                 _logger.LogDebug("Creating new connection to {Host}:{Port}", _host, _port);
                 var newConnection = await CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
+                if (!_leasedConnections.TryAdd(newConnection, 0))
+                {
+                    _logger.LogError("Connection lease tracking conflict detected for newly created connection in pool {Host}:{Port}", _host, _port);
+                    DisposeConnection(newConnection);
+                    throw new InvalidOperationException($"Failed to lease newly created connection for pool {_host}:{_port}.");
+                }
+
                 Interlocked.Increment(ref _activeConnections);
                 _logger.LogInformation("Successfully created connection to {Host}:{Port} (Total={Total}, Active={Active})",
                     _host, _port, _totalConnections, _activeConnections);
@@ -150,6 +166,15 @@ namespace FastDFS.Client.Connection
             if (connection == null)
                 throw new ArgumentNullException(nameof(connection));
 
+            if (!_leasedConnections.TryRemove(connection, out _))
+            {
+                _logger.LogError("Attempted to return a connection that is not leased from pool {Host}:{Port}. The connection will be ignored to prevent pool corruption.",
+                    _host, _port);
+                return;
+            }
+
+            Interlocked.Decrement(ref _activeConnections);
+
             if (Volatile.Read(ref _disposed) == 1)
             {
                 // Pool is disposed, just dispose the connection
@@ -157,8 +182,6 @@ namespace FastDFS.Client.Connection
                 DisposeConnection(connection);
                 return;
             }
-
-            Interlocked.Decrement(ref _activeConnections);
 
             // Validate the connection before returning to pool
             if (IsConnectionValid(connection))
@@ -417,6 +440,8 @@ namespace FastDFS.Client.Connection
                 try
                 {
                     connection.Dispose();
+                    Interlocked.Decrement(ref _totalConnections);
+                    _connectionSemaphore.Release();
                     disposedCount++;
                 }
                 catch (Exception ex)
@@ -429,9 +454,6 @@ namespace FastDFS.Client.Connection
 
             // Dispose the semaphore
             _connectionSemaphore?.Dispose();
-
-            _totalConnections = 0;
-            _activeConnections = 0;
 
             GC.SuppressFinalize(this);
         }
@@ -459,6 +481,8 @@ namespace FastDFS.Client.Connection
                 try
                 {
                     await connection.DisposeAsync().ConfigureAwait(false);
+                    Interlocked.Decrement(ref _totalConnections);
+                    _connectionSemaphore.Release();
                     disposedCount++;
                 }
                 catch (Exception ex)
@@ -471,9 +495,6 @@ namespace FastDFS.Client.Connection
 
             // Dispose the semaphore
             _connectionSemaphore?.Dispose();
-
-            _totalConnections = 0;
-            _activeConnections = 0;
 
             GC.SuppressFinalize(this);
         }

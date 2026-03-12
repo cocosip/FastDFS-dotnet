@@ -217,7 +217,7 @@ namespace FastDFS.Client.Tracker
         {
             get
             {
-                var heartbeatAge = DateTime.Now - LastHeartbeatTime;
+                var heartbeatAge = DateTime.UtcNow - LastHeartbeatTime;
                 return heartbeatAge.TotalSeconds < 120; // Consider offline if no heartbeat for 2 minutes
             }
         }

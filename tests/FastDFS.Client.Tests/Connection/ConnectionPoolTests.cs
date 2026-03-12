@@ -172,6 +172,23 @@ namespace FastDFS.Client.Tests.Connection
             Assert.Throws<ArgumentNullException>(() => pool.ReturnConnection(null!));
         }
 
+        [Fact]
+        public void ReturnConnection_WithForeignConnection_ShouldBeIgnoredWithoutCorruptingCounters()
+        {
+            // Arrange
+            var config = CreateTestConfig();
+            using var pool = new ConnectionPool("localhost", 22122, config);
+            using var foreignConnection = new FastDFSConnection("localhost", 22122);
+
+            // Act
+            pool.ReturnConnection(foreignConnection);
+
+            // Assert
+            pool.TotalConnections.Should().Be(0);
+            pool.IdleConnections.Should().Be(0);
+            pool.ActiveConnections.Should().Be(0);
+        }
+
         // Note: Tests that require actual network connections are in integration tests
         // These unit tests focus on pool logic and state management
     }

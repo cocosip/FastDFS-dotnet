@@ -67,6 +67,9 @@ namespace FastDFS.Client
             if (string.IsNullOrWhiteSpace(key))
                 throw new ArgumentException("Metadata key cannot be null or empty.", nameof(key));
 
+            ValidateMetadataComponent(key, nameof(key));
+            ValidateMetadataComponent(value, nameof(value));
+
             _metadata[key] = value ?? string.Empty;
         }
 
@@ -164,16 +167,30 @@ namespace FastDFS.Client
                 if (string.IsNullOrEmpty(record))
                     continue;
 
-                var parts = record.Split('\x02'); // FastDFS_FIELD_SEPERATOR
-                if (parts.Length >= 2)
-                {
-                    metadata.Add(parts[0], parts[1]);
-                }
+                int separatorIndex = record.IndexOf('\x02'); // FastDFS_FIELD_SEPERATOR
+                if (separatorIndex <= 0)
+                    continue;
+
+                string key = record.Substring(0, separatorIndex);
+                string value = record.Substring(separatorIndex + 1);
+                metadata.Add(key, value);
             }
 
             return metadata;
         }
 
+        private static void ValidateMetadataComponent(string? value, string paramName)
+        {
+            if (value == null)
+                return;
+
+            if (value.IndexOf('\x01') >= 0)
+                throw new ArgumentException("Metadata keys and values cannot contain the FastDFS record separator (\\x01).", paramName);
+
+            if (value.IndexOf('\x02') >= 0)
+                throw new ArgumentException("Metadata keys and values cannot contain the FastDFS field separator (\\x02).", paramName);
+        }
+ 
         /// <summary>
         /// Returns a string representation of the metadata.
         /// </summary>
