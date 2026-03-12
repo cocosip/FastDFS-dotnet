@@ -46,6 +46,7 @@ namespace FastDFS.Client
         /// <summary>
         /// Uploads a file from a stream.
         /// Automatically queries tracker for an available storage server.
+        /// This convenience overload requires a seekable stream so the remaining content length can be inferred.
         /// </summary>
         /// <param name="groupName">Optional: The storage group name. If null, tracker will select a group automatically.</param>
         /// <param name="stream">The file content as a stream.</param>
@@ -53,6 +54,19 @@ namespace FastDFS.Client
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>The complete file ID in the format "group_name/path/filename".</returns>
         Task<string> UploadAsync(string? groupName, Stream stream, string fileExtension, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Uploads a file from a stream with an explicitly provided content length.
+        /// Automatically queries tracker for an available storage server.
+        /// Use this overload for non-seekable streams such as request bodies or network streams.
+        /// </summary>
+        /// <param name="groupName">Optional: The storage group name. If null, tracker will select a group automatically.</param>
+        /// <param name="stream">The file content as a readable stream.</param>
+        /// <param name="contentLength">The exact number of bytes to upload from the current stream position.</param>
+        /// <param name="fileExtension">The file extension (e.g., "jpg", "txt"). Do not include the dot.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The complete file ID in the format "group_name/path/filename".</returns>
+        Task<string> UploadAsync(string? groupName, Stream stream, long contentLength, string fileExtension, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Uploads a file from local file path.

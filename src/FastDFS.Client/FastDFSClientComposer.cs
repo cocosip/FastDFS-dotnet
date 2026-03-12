@@ -32,7 +32,7 @@ namespace FastDFS.Client
             providerFactory ??= new DefaultConnectionPoolProviderFactory();
             var poolProvider = providerFactory.Create(configuration.ConnectionPool);
             var trackerClient = new TrackerClient(configuration.TrackerServers, poolProvider);
-            var storageClient = new StorageClient(poolProvider);
+            var storageClient = new StorageClient(poolProvider, configuration.ConnectionPool.StreamCopyBufferSize);
 
             return new FastDFSClient(
                 trackerClient,
@@ -40,8 +40,7 @@ namespace FastDFS.Client
                 name,
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
-                configuration.HttpConfig,
-                configuration.ConnectionPool.StreamCopyBufferSize);
+                configuration.HttpConfig);
         }
     }
 }

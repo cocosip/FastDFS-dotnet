@@ -298,16 +298,21 @@ namespace FastDFS.Client.Connection
             ByteConverter.WriteInt64(contentLength, bodyPrefix, 1);
             ByteExtensions.CopyFixedString(extension, bodyPrefix, 9, FastDFSConstants.FileExtNameMaxLength);
 
+            bool requestStarted = false;
+            bool responseReceived = false;
+
             try
             {
                 _logger.LogDebug("Streaming upload request to {Endpoint}: Command={Command}, Length={Length}", RemoteEndpoint, command, contentLength);
 
                 var header = new FastDFSHeader(bodyPrefix.Length + contentLength, command, 0).ToBytes();
+                requestStarted = true;
                 await SendBufferAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
                 await SendBufferAsync(bodyPrefix, 0, bodyPrefix.Length, cancellationToken).ConfigureAwait(false);
                 await SendStreamAsync(contentStream, bufferSize, cancellationToken).ConfigureAwait(false);
 
                 var response = await ReceiveAsync<UploadFileResponse>(cancellationToken).ConfigureAwait(false);
+                responseReceived = true;
                 LastUsedTime = DateTime.UtcNow;
                 return response;
             }
@@ -318,10 +323,20 @@ namespace FastDFS.Client.Connection
             }
             catch (FastDFSException)
             {
+                if (requestStarted && !responseReceived)
+                {
+                    InvalidateConnection();
+                }
+
                 throw;
             }
             catch (Exception ex)
             {
+                if (requestStarted)
+                {
+                    InvalidateConnection();
+                }
+
                 _logger.LogError(ex, "Network error during streaming upload to {Endpoint}", RemoteEndpoint);
                 throw new FastDFSNetworkException(
                     $"Error communicating with {RemoteEndpoint}.",
@@ -352,11 +367,16 @@ namespace FastDFS.Client.Connection
             if (bufferSize <= 0)
                 throw new ArgumentOutOfRangeException(nameof(bufferSize), "Buffer size must be greater than 0.");
 
+            bool requestSent = false;
+            bool responseCompleted = false;
+
             try
             {
                 _logger.LogDebug("Streaming download request to {Endpoint}: {RequestType}", RemoteEndpoint, request.GetType().Name);
                 await SendAsync(request, cancellationToken).ConfigureAwait(false);
+                requestSent = true;
                 await ReceiveToStreamAsync(destination, bufferSize, cancellationToken).ConfigureAwait(false);
+                responseCompleted = true;
                 LastUsedTime = DateTime.UtcNow;
             }
             catch (OperationCanceledException)
@@ -366,10 +386,20 @@ namespace FastDFS.Client.Connection
             }
             catch (FastDFSException)
             {
+                if (requestSent && !responseCompleted)
+                {
+                    InvalidateConnection();
+                }
+
                 throw;
             }
             catch (Exception ex)
             {
+                if (requestSent)
+                {
+                    InvalidateConnection();
+                }
+
                 _logger.LogError(ex, "Network error during streaming download from {Endpoint}", RemoteEndpoint);
                 throw new FastDFSNetworkException(
                     $"Error communicating with {RemoteEndpoint}.",

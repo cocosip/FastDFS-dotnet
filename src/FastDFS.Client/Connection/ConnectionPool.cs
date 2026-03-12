@@ -99,7 +99,8 @@ namespace FastDFS.Client.Connection
             // the remote may have closed the socket while the connection was idle
             while (_idleConnections.TryDequeue(out var connection))
             {
-                if (IsConnectionValid(connection, deepCheck: true))
+                bool shouldDeepCheck = (DateTime.UtcNow - connection.LastUsedTime).TotalSeconds >= 5;
+                if (IsConnectionValid(connection, deepCheck: shouldDeepCheck))
                 {
                     if (!_leasedConnections.TryAdd(connection, 0))
                     {
@@ -434,7 +435,7 @@ namespace FastDFS.Client.Connection
             _cleanupTimer?.Dispose();
 
             // Dispose all idle connections
-            int disposedCount = 0;
+            int disposedIdleCount = 0;
             while (_idleConnections.TryDequeue(out var connection))
             {
                 try
@@ -442,17 +443,40 @@ namespace FastDFS.Client.Connection
                     connection.Dispose();
                     Interlocked.Decrement(ref _totalConnections);
                     _connectionSemaphore.Release();
-                    disposedCount++;
+                    disposedIdleCount++;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Error disposing connection to {Host}:{Port}", _host, _port);
+                    _logger.LogWarning(ex, "Error disposing idle connection to {Host}:{Port}", _host, _port);
                 }
             }
 
-            _logger.LogInformation("Disposed {Count} idle connections to {Host}:{Port}", disposedCount, _host, _port);
+            // Force-close any leased connections as part of pool shutdown.
+            // Once the pool is disposed, borrowed connections must not outlive the pool.
+            int disposedLeasedCount = 0;
+            foreach (var leased in _leasedConnections.Keys)
+            {
+                if (!_leasedConnections.TryRemove(leased, out _))
+                    continue;
 
-            // Dispose the semaphore
+                try
+                {
+                    leased.Dispose();
+                    Interlocked.Decrement(ref _totalConnections);
+                    Interlocked.Decrement(ref _activeConnections);
+                    _connectionSemaphore.Release();
+                    disposedLeasedCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error disposing leased connection to {Host}:{Port}", _host, _port);
+                }
+            }
+
+            _logger.LogInformation("Disposed {IdleCount} idle and {LeasedCount} leased connections to {Host}:{Port}",
+                disposedIdleCount, disposedLeasedCount, _host, _port);
+
+            // Dispose the semaphore after all tracked connections have released their slots.
             _connectionSemaphore?.Dispose();
 
             GC.SuppressFinalize(this);
@@ -475,7 +499,7 @@ namespace FastDFS.Client.Connection
             _cleanupTimer?.Dispose();
 
             // Dispose all idle connections asynchronously
-            int disposedCount = 0;
+            int disposedIdleCount = 0;
             while (_idleConnections.TryDequeue(out var connection))
             {
                 try
@@ -483,17 +507,39 @@ namespace FastDFS.Client.Connection
                     await connection.DisposeAsync().ConfigureAwait(false);
                     Interlocked.Decrement(ref _totalConnections);
                     _connectionSemaphore.Release();
-                    disposedCount++;
+                    disposedIdleCount++;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Error disposing connection to {Host}:{Port}", _host, _port);
+                    _logger.LogWarning(ex, "Error disposing idle connection to {Host}:{Port}", _host, _port);
                 }
             }
 
-            _logger.LogInformation("Disposed {Count} idle connections to {Host}:{Port}", disposedCount, _host, _port);
+            // Force-close any leased connections as part of pool shutdown.
+            int disposedLeasedCount = 0;
+            foreach (var leased in _leasedConnections.Keys)
+            {
+                if (!_leasedConnections.TryRemove(leased, out _))
+                    continue;
 
-            // Dispose the semaphore
+                try
+                {
+                    await leased.DisposeAsync().ConfigureAwait(false);
+                    Interlocked.Decrement(ref _totalConnections);
+                    Interlocked.Decrement(ref _activeConnections);
+                    _connectionSemaphore.Release();
+                    disposedLeasedCount++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error disposing leased connection to {Host}:{Port}", _host, _port);
+                }
+            }
+
+            _logger.LogInformation("Disposed {IdleCount} idle and {LeasedCount} leased connections to {Host}:{Port}",
+                disposedIdleCount, disposedLeasedCount, _host, _port);
+
+            // Dispose the semaphore after all tracked connections have released their slots.
             _connectionSemaphore?.Dispose();
 
             GC.SuppressFinalize(this);

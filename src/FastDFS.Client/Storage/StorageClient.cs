@@ -26,13 +26,14 @@ namespace FastDFS.Client.Storage
         private readonly IConnectionPoolProvider _poolProvider;
         private readonly ILogger _logger;
         private readonly bool _ownsPoolProvider;
+        private readonly int _streamCopyBufferSize;
         private bool _disposed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="StorageClient"/> class.
         /// </summary>
         public StorageClient(ConnectionPoolConfiguration poolOptions, ILoggerFactory? loggerFactory = null)
-            : this(new ConnectionPoolProvider(poolOptions, loggerFactory), loggerFactory, true)
+            : this(new ConnectionPoolProvider(poolOptions, loggerFactory), poolOptions?.StreamCopyBufferSize ?? 81920, loggerFactory, true)
         {
         }
 
@@ -42,17 +43,32 @@ namespace FastDFS.Client.Storage
         /// <param name="poolProvider">The shared connection pool provider.</param>
         /// <param name="loggerFactory">Optional logger factory.</param>
         public StorageClient(IConnectionPoolProvider poolProvider, ILoggerFactory? loggerFactory = null)
-            : this(poolProvider, loggerFactory, false)
+            : this(poolProvider, 81920, loggerFactory, false)
         {
         }
 
-        private StorageClient(IConnectionPoolProvider poolProvider, ILoggerFactory? loggerFactory, bool ownsPoolProvider)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StorageClient"/> class.
+        /// </summary>
+        /// <param name="poolProvider">The shared connection pool provider.</param>
+        /// <param name="streamCopyBufferSize">The buffer size used for streaming upload/download operations.</param>
+        /// <param name="loggerFactory">Optional logger factory.</param>
+        public StorageClient(IConnectionPoolProvider poolProvider, int streamCopyBufferSize, ILoggerFactory? loggerFactory = null)
+            : this(poolProvider, streamCopyBufferSize, loggerFactory, false)
+        {
+        }
+
+        private StorageClient(IConnectionPoolProvider poolProvider, int streamCopyBufferSize, ILoggerFactory? loggerFactory, bool ownsPoolProvider)
         {
             _poolProvider = poolProvider ?? throw new ArgumentNullException(nameof(poolProvider));
+            if (streamCopyBufferSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(streamCopyBufferSize), "Stream copy buffer size must be greater than 0.");
+
             _logger = loggerFactory?.CreateLogger<StorageClient>() ?? NullLogger<StorageClient>.Instance;
             _ownsPoolProvider = ownsPoolProvider;
+            _streamCopyBufferSize = streamCopyBufferSize;
 
-            _logger.LogInformation("StorageClient initialized");
+            _logger.LogInformation("StorageClient initialized with StreamCopyBufferSize={BufferSize}", _streamCopyBufferSize);
         }
 
         /// <summary>
@@ -106,7 +122,7 @@ namespace FastDFS.Client.Storage
                     contentStream,
                     contentLength,
                     fileExtension,
-                    81920,
+                    _streamCopyBufferSize,
                     cancellationToken).ConfigureAwait(false);
 
                 return FileIdHelper.CombineFileId(response.GroupName, response.FileName);
@@ -223,7 +239,7 @@ namespace FastDFS.Client.Storage
                     DownloadBytes = length
                 };
 
-                await connection.DownloadToStreamAsync(request, destination, 81920, cancellationToken).ConfigureAwait(false);
+                await connection.DownloadToStreamAsync(request, destination, _streamCopyBufferSize, cancellationToken).ConfigureAwait(false);
             }, cancellationToken).ConfigureAwait(false);
         }
 

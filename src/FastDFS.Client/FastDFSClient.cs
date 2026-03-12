@@ -28,7 +28,6 @@ namespace FastDFS.Client
         private readonly StorageSelectionStrategy _selectionStrategy;
         private readonly IStorageSelector? _storageSelector;
         private readonly HttpConfiguration? _httpConfig;
-        private readonly int _streamCopyBufferSize;
         private bool _disposed;
 
         /// <summary>
@@ -40,7 +39,6 @@ namespace FastDFS.Client
         /// <param name="defaultGroupName">The default storage group name to use when not specified.</param>
         /// <param name="selectionStrategy">The storage selection strategy for client-side load balancing.</param>
         /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
-        /// <param name="streamCopyBufferSize">Stram copy buffer size</param>
         /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
         /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
         public FastDFSClient(
@@ -50,7 +48,6 @@ namespace FastDFS.Client
             string? defaultGroupName = null,
             StorageSelectionStrategy selectionStrategy = StorageSelectionStrategy.TrackerSelection,
             HttpConfiguration? httpConfig = null,
-            int? streamCopyBufferSize = null,
             ILoggerFactory? loggerFactory = null)
         {
             _trackerClient = trackerClient ?? throw new ArgumentNullException(nameof(trackerClient));
@@ -60,7 +57,6 @@ namespace FastDFS.Client
             _defaultGroupName = defaultGroupName;
             _selectionStrategy = selectionStrategy;
             _httpConfig = httpConfig;
-            _streamCopyBufferSize = streamCopyBufferSize ?? 81920;
 
             _storageSelector = selectionStrategy switch
             {
@@ -159,6 +155,7 @@ namespace FastDFS.Client
         /// <summary>
         /// Uploads a file from a stream to the FastDFS cluster.
         /// Automatically queries the tracker for an available storage server based on the configured selection strategy.
+        /// This convenience overload requires a seekable stream so the remaining content length can be inferred.
         /// </summary>
         /// <param name="groupName">Optional: The storage group name. If null, the tracker will select a group automatically.</param>
         /// <param name="stream">The file content as a stream. Must be readable.</param>
@@ -167,9 +164,9 @@ namespace FastDFS.Client
         /// <returns>The file ID in the format "group_name/filename".</returns>
         /// <exception cref="ObjectDisposedException">Thrown when the client has been disposed.</exception>
         /// <exception cref="ArgumentNullException">Thrown when stream is null.</exception>
-        /// <exception cref="ArgumentException">Thrown when stream is not readable or fileExtension is null/empty.</exception>
+        /// <exception cref="ArgumentException">Thrown when stream is not readable, not seekable, empty, or fileExtension is null/empty.</exception>
         /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
-        public async Task<string> UploadAsync(
+        public Task<string> UploadAsync(
             string? groupName,
             Stream stream,
             string fileExtension,
@@ -181,12 +178,41 @@ namespace FastDFS.Client
             if (!stream.CanRead)
                 throw new ArgumentException("Stream must be readable.", nameof(stream));
             if (!stream.CanSeek)
-                throw new ArgumentException("Stream must support seeking so the content length can be determined without buffering.", nameof(stream));
+                throw new ArgumentException("Stream must support seeking to infer content length. Use the overload that accepts an explicit content length for non-seekable streams.", nameof(stream));
 
             long originalPosition = stream.Position;
             long contentLength = stream.Length - originalPosition;
+            return UploadAsync(groupName, stream, contentLength, fileExtension, cancellationToken);
+        }
+
+        /// <summary>
+        /// Uploads a file from a stream to the FastDFS cluster with an explicitly provided content length.
+        /// Automatically queries the tracker for an available storage server based on the configured selection strategy.
+        /// </summary>
+        /// <param name="groupName">Optional: The storage group name. If null, the tracker will select a group automatically.</param>
+        /// <param name="stream">The file content as a readable stream.</param>
+        /// <param name="contentLength">The exact number of bytes to upload from the current stream position.</param>
+        /// <param name="fileExtension">The file extension without the leading dot (e.g., "jpg", "txt").</param>
+        /// <param name="cancellationToken">A cancellation token to cancel the operation.</param>
+        /// <returns>The file ID in the format "group_name/filename".</returns>
+        /// <exception cref="ObjectDisposedException">Thrown when the client has been disposed.</exception>
+        /// <exception cref="ArgumentNullException">Thrown when stream is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when stream is not readable, contentLength is invalid, or fileExtension is null/empty.</exception>
+        /// <exception cref="FastDFSException">Thrown when the upload operation fails.</exception>
+        public async Task<string> UploadAsync(
+            string? groupName,
+            Stream stream,
+            long contentLength,
+            string fileExtension,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (stream == null)
+                throw new ArgumentNullException(nameof(stream));
+            if (!stream.CanRead)
+                throw new ArgumentException("Stream must be readable.", nameof(stream));
             if (contentLength <= 0)
-                throw new ArgumentException("Stream content cannot be empty.", nameof(stream));
+                throw new ArgumentOutOfRangeException(nameof(contentLength), "Content length must be greater than 0.");
             if (string.IsNullOrEmpty(fileExtension))
                 throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
 

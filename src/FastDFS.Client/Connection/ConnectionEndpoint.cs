@@ -19,7 +19,7 @@ namespace FastDFS.Client.Connection
             if (port <= 0 || port > 65535)
                 throw new ArgumentOutOfRangeException(nameof(port), "Port must be between 1 and 65535.");
 
-            Host = host.Trim();
+            Host = NormalizeHost(host);
             Port = port;
         }
 
@@ -36,7 +36,9 @@ namespace FastDFS.Client.Connection
         /// <summary>
         /// Gets the normalized endpoint key.
         /// </summary>
-        public string Key => $"{Host}:{Port}";
+        public string Key => Host.IndexOf(':') >= 0
+            ? $"[{Host}]:{Port}"
+            : $"{Host}:{Port}";
 
         /// <summary>
         /// Parses an endpoint from a string in the format <c>host:port</c>.
@@ -48,14 +50,33 @@ namespace FastDFS.Client.Connection
             if (string.IsNullOrWhiteSpace(value))
                 throw new ArgumentException("Endpoint cannot be null or empty.", nameof(value));
 
-            var parts = value.Split(':');
-            if (parts.Length != 2)
-                throw new ArgumentException($"Invalid endpoint address format: {value}. Expected format: 'host:port'", nameof(value));
+            var trimmed = value.Trim();
+            string host;
+            string portText;
 
-            if (!int.TryParse(parts[1], out int port))
+            if (trimmed[0] == '[')
+            {
+                int closingBracketIndex = trimmed.IndexOf(']');
+                if (closingBracketIndex <= 1 || closingBracketIndex == trimmed.Length - 1 || trimmed[closingBracketIndex + 1] != ':')
+                    throw new ArgumentException($"Invalid endpoint address format: {value}. Expected format: 'host:port' or '[ipv6]:port'", nameof(value));
+
+                host = trimmed.Substring(1, closingBracketIndex - 1);
+                portText = trimmed.Substring(closingBracketIndex + 2);
+            }
+            else
+            {
+                int separatorIndex = trimmed.LastIndexOf(':');
+                if (separatorIndex <= 0 || separatorIndex == trimmed.Length - 1)
+                    throw new ArgumentException($"Invalid endpoint address format: {value}. Expected format: 'host:port' or '[ipv6]:port'", nameof(value));
+
+                host = trimmed.Substring(0, separatorIndex);
+                portText = trimmed.Substring(separatorIndex + 1);
+            }
+
+            if (!int.TryParse(portText, out int port))
                 throw new ArgumentException($"Invalid port number in endpoint address: {value}", nameof(value));
 
-            return new ConnectionEndpoint(parts[0], port);
+            return new ConnectionEndpoint(host, port);
         }
 
         /// <inheritdoc/>
@@ -77,6 +98,20 @@ namespace FastDFS.Client.Connection
 
         /// <inheritdoc/>
         public override string ToString() => Key;
+
+        private static string NormalizeHost(string host)
+        {
+            var normalized = host.Trim();
+            if (normalized.Length >= 2 && normalized[0] == '[' && normalized[normalized.Length - 1] == ']')
+            {
+                normalized = normalized.Substring(1, normalized.Length - 2);
+            }
+
+            if (string.IsNullOrWhiteSpace(normalized))
+                throw new ArgumentException("Host cannot be null or empty.", nameof(host));
+
+            return normalized;
+        }
 
         /// <summary>
         /// Determines whether two endpoints are equal.

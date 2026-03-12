@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using FastDFS.Client.Storage;
 
@@ -71,17 +72,7 @@ namespace FastDFS.Client.Configuration
                 if (string.IsNullOrWhiteSpace(server))
                     throw new ArgumentException("Tracker server endpoint cannot be null or empty.", nameof(TrackerServers));
 
-                // Basic format validation: should contain ':'
-                if (!server.Contains(":"))
-                    throw new ArgumentException($"Invalid tracker server endpoint format: {server}. Expected format: 'host:port'", nameof(TrackerServers));
-
-                // Try to parse the port
-                var parts = server.Split(':');
-                if (parts.Length != 2)
-                    throw new ArgumentException($"Invalid tracker server endpoint format: {server}. Expected format: 'host:port'", nameof(TrackerServers));
-
-                if (!int.TryParse(parts[1], out int port) || port <= 0 || port > 65535)
-                    throw new ArgumentException($"Invalid port number in tracker server endpoint: {server}", nameof(TrackerServers));
+                Connection.ConnectionEndpoint.Parse(server);
             }
 
             if (NetworkTimeout <= 0)
@@ -116,7 +107,8 @@ namespace FastDFS.Client.Configuration
                 .Append(pool.SendTimeout).Append(',')
                 .Append(pool.ReceiveTimeout).Append(',')
                 .Append(pool.ConnectionIdleTimeout).Append(',')
-                .Append(pool.ConnectionLifetime).Append('|')
+                .Append(pool.ConnectionLifetime).Append(',')
+                .Append(pool.StreamCopyBufferSize).Append('|')
                 .Append(NetworkTimeout).Append('|')
                 .Append(Charset ?? string.Empty).Append('|')
                 .Append(DefaultGroupName ?? string.Empty).Append('|')
@@ -129,13 +121,13 @@ namespace FastDFS.Client.Configuration
                     .Select(kvp => $"{kvp.Key}={kvp.Value}"));
                 sb.Append('|')
                   .Append(urls).Append('|')
-                  .Append(HttpConfig.SecretKey ?? string.Empty).Append('|')
+                  .Append(HashSensitiveValue(HttpConfig.SecretKey)).Append('|')
                   .Append(HttpConfig.AntiStealTokenEnabled).Append('|')
                   .Append(HttpConfig.DefaultTokenExpireSeconds).Append('|')
                   .Append(HttpConfig.DefaultServerUrlTemplate ?? string.Empty);
             }
 
-            return sb.ToString();
+            return ComputeStableHash(sb.ToString());
         }
 
         /// <summary>
@@ -154,7 +146,8 @@ namespace FastDFS.Client.Configuration
                     ConnectionLifetime = ConnectionPool.ConnectionLifetime,
                     ConnectionTimeout = ConnectionPool.ConnectionTimeout,
                     SendTimeout = ConnectionPool.SendTimeout,
-                    ReceiveTimeout = ConnectionPool.ReceiveTimeout
+                    ReceiveTimeout = ConnectionPool.ReceiveTimeout,
+                    StreamCopyBufferSize = ConnectionPool.StreamCopyBufferSize
                 },
                 NetworkTimeout = NetworkTimeout,
                 Charset = Charset,
@@ -169,6 +162,22 @@ namespace FastDFS.Client.Configuration
                     DefaultTokenExpireSeconds = HttpConfig.DefaultTokenExpireSeconds
                 } : null
             };
+        }
+
+        private static string HashSensitiveValue(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            return ComputeStableHash(value!);
+        }
+
+        private static string ComputeStableHash(string value)
+        {
+            using var sha256 = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(value);
+            var hash = sha256.ComputeHash(bytes);
+            return Convert.ToBase64String(hash);
         }
     }
 }

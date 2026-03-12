@@ -210,7 +210,7 @@ namespace FastDFS.Client.DependencyInjection
             // Create new physical client
             var poolProvider = _poolProviderFactory.Create(configuration.ConnectionPool);
             var trackerClient = new TrackerClient(configuration.TrackerServers, poolProvider, _loggerFactory);
-            var storageClient = new StorageClient(poolProvider, _loggerFactory);
+            var storageClient = new StorageClient(poolProvider, configuration.ConnectionPool.StreamCopyBufferSize, _loggerFactory);
             var client = new FastDFSClient(
                 trackerClient,
                 storageClient,
@@ -218,7 +218,6 @@ namespace FastDFS.Client.DependencyInjection
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
                 configuration.HttpConfig,
-                configuration.ConnectionPool.StreamCopyBufferSize,
                 _loggerFactory);
 
             _sharedClients[configKey] = client;
