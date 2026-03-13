@@ -309,7 +309,7 @@ namespace FastDFS.Client.Connection
                 requestStarted = true;
                 await SendBufferAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
                 await SendBufferAsync(bodyPrefix, 0, bodyPrefix.Length, cancellationToken).ConfigureAwait(false);
-                await SendStreamAsync(contentStream, bufferSize, cancellationToken).ConfigureAwait(false);
+                await SendStreamAsync(contentStream, contentLength, bufferSize, cancellationToken).ConfigureAwait(false);
 
                 var response = await ReceiveAsync<UploadFileResponse>(cancellationToken).ConfigureAwait(false);
                 responseReceived = true;
@@ -472,15 +472,10 @@ namespace FastDFS.Client.Connection
                     RemoteEndpoint, header.Command, header.Status, header.BodyLength);
 
                 // Read the body if present
+                ValidateResponseBodyLength(header);
+
                 if (header.BodyLength > 0)
                 {
-                    // Validate body length to prevent excessive memory allocation
-                    if (header.BodyLength > int.MaxValue)
-                    {
-                        _logger.LogError("Response body length too large from {Endpoint}: {BodyLength} bytes", RemoteEndpoint, header.BodyLength);
-                        throw new FastDFSProtocolException($"Response body length is too large: {header.BodyLength} bytes.");
-                    }
-
                     int bodyLength = (int)header.BodyLength;
 
                     // Decode() stores the body reference on the response object, so we cannot
@@ -549,6 +544,7 @@ namespace FastDFS.Client.Connection
             {
                 await ReadExactlyAsync(headerBuffer, 0, FastDFSHeader.HeaderSize, cancellationToken).ConfigureAwait(false);
                 var header = FastDFSHeader.Parse(headerBuffer, 0);
+                ValidateResponseBodyLength(header, allowLargeBodies: true);
 
                 if (!header.IsSuccess)
                 {
@@ -607,18 +603,24 @@ namespace FastDFS.Client.Connection
             }
         }
 
-        private async Task SendStreamAsync(Stream contentStream, int bufferSize, CancellationToken cancellationToken)
+        private async Task SendStreamAsync(Stream contentStream, long contentLength, int bufferSize, CancellationToken cancellationToken)
         {
             byte[] buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
             try
             {
-                while (true)
+                long remaining = contentLength;
+                while (remaining > 0)
                 {
-                    int read = await contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false);
+                    int chunkSize = remaining > buffer.Length ? buffer.Length : (int)remaining;
+                    int read = await contentStream.ReadAsync(buffer, 0, chunkSize, cancellationToken).ConfigureAwait(false);
                     if (read == 0)
-                        break;
+                    {
+                        throw new EndOfStreamException(
+                            $"Content stream ended before the declared content length was transmitted. Remaining bytes: {remaining}.");
+                    }
 
                     await SendBufferAsync(buffer, 0, read, cancellationToken).ConfigureAwait(false);
+                    remaining -= read;
                 }
             }
             finally
@@ -690,6 +692,22 @@ namespace FastDFS.Client.Connection
         {
             Interlocked.Exchange(ref _poisoned, 1);
             CloseSocket();
+        }
+
+        private void ValidateResponseBodyLength(FastDFSHeader header, bool allowLargeBodies = false)
+        {
+            if (header.BodyLength < 0)
+            {
+                InvalidateConnection();
+                throw new FastDFSProtocolException($"Response body length cannot be negative: {header.BodyLength} bytes.");
+            }
+
+            if (!allowLargeBodies && header.BodyLength > int.MaxValue)
+            {
+                InvalidateConnection();
+                _logger.LogError("Response body length too large from {Endpoint}: {BodyLength} bytes", RemoteEndpoint, header.BodyLength);
+                throw new FastDFSProtocolException($"Response body length is too large: {header.BodyLength} bytes.");
+            }
         }
 
         private void InvalidateConnection()

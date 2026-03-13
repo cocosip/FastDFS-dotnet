@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- 导入公共属性 -->
-  <Import Project="..\common.props" />
+  <Import Project="..\..\common.props" />
 
   <!-- 项目特定属性 -->
   <PropertyGroup>

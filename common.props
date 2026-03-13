@@ -1,8 +1,8 @@
 <Project>
   <!--
-    公共项目属性文件
-    用于 FastDFS.Client 和 FastDFS.Client.DependencyInjection 项目
-    包版本由根目录的 Directory.Packages.props 统一管理
+    鍏叡椤圭洰灞炴€ф枃浠?
+    鐢ㄤ簬 FastDFS.Client 鍜?FastDFS.Client.DependencyInjection 椤圭洰
+    鍖呯増鏈敱鏍圭洰褰曠殑 Directory.Packages.props 缁熶竴绠＄悊
   -->
 
   <PropertyGroup Label="Common Properties">
