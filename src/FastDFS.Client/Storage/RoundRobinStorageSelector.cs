@@ -34,7 +34,8 @@ namespace FastDFS.Client.Storage
                 return servers[0];
 
             // Thread-safe increment and wrap around
-            int index = Interlocked.Increment(ref _currentIndex) % servers.Count;
+            // Use unsigned modulo to avoid negative index after int overflow (~2 billion increments)
+            int index = (int)((uint)Interlocked.Increment(ref _currentIndex) % servers.Count);
             return servers[index];
         }
     }

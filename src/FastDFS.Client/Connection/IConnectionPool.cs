@@ -7,7 +7,7 @@ namespace FastDFS.Client.Connection
     /// <summary>
     /// Interface for managing a pool of FastDFS connections.
     /// </summary>
-    public interface IConnectionPool : IDisposable
+    public interface IConnectionPool : IDisposable, IAsyncDisposable
     {
         /// <summary>
         /// Gets a connection from the pool asynchronously.

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -80,14 +81,32 @@ namespace FastDFS.Client.Connection
 
             foreach (var pool in _pools.Values)
             {
+                try { pool.Dispose(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing connection pool"); }
+            }
+
+            _pools.Clear();
+            GC.SuppressFinalize(this);
+        }
+
+        /// <inheritdoc/>
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            foreach (var pool in _pools.Values)
+            {
                 try
                 {
-                    pool.Dispose();
+                    if (pool is IAsyncDisposable asyncDisposable)
+                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                    else
+                        pool.Dispose();
                 }
-                catch
-                {
-                    // Suppress exceptions during disposal
-                }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing connection pool asynchronously"); }
             }
 
             _pools.Clear();

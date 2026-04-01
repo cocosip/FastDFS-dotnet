@@ -1090,8 +1090,19 @@ namespace FastDFS.Client
             if (!disposing)
                 return;
 
-            try { (_trackerClient as IDisposable)?.Dispose(); } catch { }
-            try { (_storageClient as IDisposable)?.Dispose(); } catch { }
+            // Dispose tracker client with error logging (don't throw during dispose)
+            if (_trackerClient is IDisposable trackerDisposable)
+            {
+                try { trackerDisposable.Dispose(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing tracker client for '{Name}'", _name); }
+            }
+
+            // Dispose storage client with error logging (don't throw during dispose)
+            if (_storageClient is IDisposable storageDisposable)
+            {
+                try { storageDisposable.Dispose(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing storage client for '{Name}'", _name); }
+            }
         }
     }
 }

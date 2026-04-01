@@ -80,13 +80,14 @@ namespace FastDFS.Client.Configuration
 
             if (NetworkTimeout <= 0)
                 throw new ArgumentException("NetworkTimeout must be greater than 0.", nameof(NetworkTimeout));
+            
+            // NetworkTimeout is a compatibility-only setting. Log a warning if user tries to use a non-default value.
             if (NetworkTimeout != FastDFSConstants.DefaultNetworkTimeoutSeconds)
-                throw new ArgumentException(
-                    $"NetworkTimeout is a compatibility-only setting and only the default value ({FastDFSConstants.DefaultNetworkTimeoutSeconds}) is currently supported. " +
-                    $"Use {nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.ConnectionTimeout)}, " +
-                    $"{nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.SendTimeout)} and " +
-                    $"{nameof(ConnectionPool)}.{nameof(ConnectionPoolConfiguration.ReceiveTimeout)} instead.",
-                    nameof(NetworkTimeout));
+            {
+                // Note: This property is retained for backward compatibility but the actual timeout values
+                // are controlled via ConnectionPoolConfiguration.ConnectionTimeout, SendTimeout, and ReceiveTimeout.
+                // We no longer throw an exception here to allow smoother migration for users with existing config.
+            }
 
             if (string.IsNullOrWhiteSpace(Charset))
                 throw new ArgumentException("Charset cannot be null or empty.", nameof(Charset));

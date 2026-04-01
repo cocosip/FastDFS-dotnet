@@ -142,17 +142,30 @@ namespace FastDFS.Client.Connection
             {
                 _logger.LogDebug("Resolving DNS for {Host}...", _host);
 
-                // Resolve DNS asynchronously
-                var addresses = await Dns.GetHostAddressesAsync(_host).ConfigureAwait(false);
+                // Resolve DNS asynchronously with timeout protection
+                // Dns.GetHostAddressesAsync doesn't have built-in timeout on some platforms
+                using var dnsTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, dnsTimeoutCts.Token);
+                
+                Task<IPAddress[]> dnsTask = Dns.GetHostAddressesAsync(_host);
+                Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(30), linkedCts.Token);
+                
+                if (await Task.WhenAny(dnsTask, timeoutTask).ConfigureAwait(false) == timeoutTask)
+                {
+                    throw new TimeoutException($"DNS resolution timed out for {_host} after 30 seconds.");
+                }
+                
+                var addresses = await dnsTask.ConfigureAwait(false);
                 if (addresses == null || addresses.Length == 0)
                     throw new SocketException((int)SocketError.HostNotFound);
 
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // Pick a random address to distribute load across multi-IP DNS entries
+                // Use unsigned modulo to avoid negative index after int overflow (~2 billion increments)
                 var address = addresses.Length == 1
                     ? addresses[0]
-                    : addresses[System.Threading.Interlocked.Increment(ref _dnsRoundRobinIndex) % addresses.Length];
+                    : addresses[(uint)System.Threading.Interlocked.Increment(ref _dnsRoundRobinIndex) % addresses.Length];
                 _socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
                 {
                     // Configure socket options for better performance
@@ -770,17 +783,18 @@ namespace FastDFS.Client.Connection
 
         /// <summary>
         /// Asynchronously disposes the connection and releases resources.
+        /// Note: Socket disposal is inherently synchronous on netstandard2.0, so this method
+        /// returns a completed ValueTask rather than performing actual async I/O.
         /// </summary>
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync()
         {
             if (_disposed)
-                return;
+                return default;
 
             _disposed = true;
-
             CloseSocket();
-
             GC.SuppressFinalize(this);
+            return default;
         }
 
         /// <summary>

@@ -255,11 +255,11 @@ namespace FastDFS.Client.Connection
             return true;
         }
 
-        /// <summary>
+/// <summary>
         /// Cleanup timer callback to remove idle and expired connections.
         /// </summary>
         /// <param name="state">Timer state (not used).</param>
-        private void CleanupIdleConnections(object? state)
+        private async void CleanupIdleConnections(object? state)
         {
             if (Volatile.Read(ref _disposed) == 1)
                 return;
@@ -280,15 +280,12 @@ namespace FastDFS.Client.Connection
                 _logger.LogDebug("Starting connection cleanup for {Host}:{Port} (Idle={Idle}, Total={Total})",
                     _host, _port, idleCount, _totalConnections);
 
-                // Temporary list — single-threaded timer callback, no need for ConcurrentQueue
                 var validConnections = new System.Collections.Generic.List<FastDFSConnection>(idleCount);
 
-                // Process all idle connections
                 while (_idleConnections.TryDequeue(out var connection))
                 {
                     bool shouldKeep = false;
 
-                    // Cleanup runs in a timer — use deep Poll check for all idle connections
                     if (validConnections.Count < minToKeep && connection.PollIsAlive())
                     {
                         shouldKeep = true;
@@ -304,13 +301,11 @@ namespace FastDFS.Client.Connection
                     }
                     else
                     {
-                        // Connection is invalid or excessive, dispose it
                         DisposeConnection(connection, releaseLeaseSlot: false);
                         removed++;
                     }
                 }
 
-                // Put valid connections back to the pool
                 foreach (var connection in validConnections)
                 {
                     _idleConnections.Enqueue(connection);
@@ -322,7 +317,6 @@ namespace FastDFS.Client.Connection
                         removed, _host, _port, _totalConnections);
                 }
 
-                // If we have fewer than minimum connections, create more
                 int currentTotal = _totalConnections;
                 if (currentTotal < minToKeep)
                 {
@@ -331,70 +325,7 @@ namespace FastDFS.Client.Connection
                         _host, _port, toCreate);
 
                     var ct = _disposeCts.Token;
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            for (int i = 0; i < toCreate; i++)
-                            {
-                                if (ct.IsCancellationRequested)
-                                    break;
-
-                                int currentConnectionCount = Volatile.Read(ref _totalConnections);
-                                if (currentConnectionCount >= minToKeep || currentConnectionCount >= _options.MaxConnectionPerServer)
-                                    break;
-
-                                try
-                                {
-                                    bool acquired = await _connectionSemaphore.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
-                                    if (acquired)
-                                    {
-                                        try
-                                        {
-                                            currentConnectionCount = Volatile.Read(ref _totalConnections);
-                                            if (currentConnectionCount >= minToKeep || currentConnectionCount >= _options.MaxConnectionPerServer)
-                                            {
-                                                _connectionSemaphore.Release();
-                                                break;
-                                            }
-
-                                            var connection = await CreateConnectionAsync(ct).ConfigureAwait(false);
-                                            _idleConnections.Enqueue(connection);
-                                            _connectionSemaphore.Release();
-                                            _logger.LogDebug("Prewarmed connection {Index}/{Total} to {Host}:{Port}",
-                                                i + 1, toCreate, _host, _port);
-                                        }
-                                        catch (OperationCanceledException)
-                                        {
-                                            _connectionSemaphore.Release();
-                                            _logger.LogDebug("Prewarm cancelled for {Host}:{Port} at connection {Index}/{Total}",
-                                                _host, _port, i + 1, toCreate);
-                                            break;
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _connectionSemaphore.Release();
-                                            _logger.LogWarning(ex, "Failed to prewarm connection {Index}/{Total} to {Host}:{Port}",
-                                                i + 1, toCreate, _host, _port);
-                                        }
-                                    }
-                                }
-                                catch (OperationCanceledException)
-                                {
-                                    break;
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogWarning(ex, "Failed to acquire semaphore for prewarming connection to {Host}:{Port}",
-                                        _host, _port);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Prewarm task failed for {Host}:{Port}", _host, _port);
-                        }
-                    }, ct);
+                    _ = PrewarmConnectionsAsync(toCreate, ct);
                 }
             }
             catch (Exception ex)
@@ -404,6 +335,66 @@ namespace FastDFS.Client.Connection
             finally
             {
                 Interlocked.Exchange(ref _cleanupInProgress, 0);
+            }
+        }
+
+        private async Task PrewarmConnectionsAsync(int toCreate, CancellationToken ct)
+        {
+            int minToKeep = _options.MinConnectionPerServer;
+            
+            for (int i = 0; i < toCreate; i++)
+            {
+                if (ct.IsCancellationRequested || Volatile.Read(ref _disposed) == 1)
+                    break;
+
+                int currentConnectionCount = Volatile.Read(ref _totalConnections);
+                if (currentConnectionCount >= minToKeep || currentConnectionCount >= _options.MaxConnectionPerServer)
+                    break;
+
+                try
+                {
+                    bool acquired = await _connectionSemaphore.WaitAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                    if (!acquired)
+                        continue;
+
+                    try
+                    {
+                        currentConnectionCount = Volatile.Read(ref _totalConnections);
+                        if (currentConnectionCount >= minToKeep || currentConnectionCount >= _options.MaxConnectionPerServer)
+                        {
+                            _connectionSemaphore.Release();
+                            break;
+                        }
+
+                        var connection = await CreateConnectionAsync(ct).ConfigureAwait(false);
+                        _idleConnections.Enqueue(connection);
+                        _connectionSemaphore.Release();
+                        _logger.LogDebug("Prewarmed connection {Index}/{Total} to {Host}:{Port}",
+                            i + 1, toCreate, _host, _port);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _connectionSemaphore.Release();
+                        _logger.LogDebug("Prewarm cancelled for {Host}:{Port} at connection {Index}/{Total}",
+                            _host, _port, i + 1, toCreate);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _connectionSemaphore.Release();
+                        _logger.LogWarning(ex, "Failed to prewarm connection {Index}/{Total} to {Host}:{Port}",
+                            i + 1, toCreate, _host, _port);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to acquire semaphore for prewarming connection to {Host}:{Port}",
+                        _host, _port);
+                }
             }
         }
 

@@ -61,6 +61,7 @@ namespace FastDFS.Client.Utilities
 
         /// <summary>
         /// Fills a byte array with a specific value.
+        /// Uses optimized Array.Clear when filling with zeros, otherwise uses loop.
         /// </summary>
         /// <param name="bytes">The byte array to fill.</param>
         /// <param name="value">The value to fill with.</param>
@@ -69,9 +70,16 @@ namespace FastDFS.Client.Utilities
             if (bytes == null)
                 throw new ArgumentNullException(nameof(bytes));
 
-            for (int i = 0; i < bytes.Length; i++)
+            if (value == 0)
             {
-                bytes[i] = value;
+                Array.Clear(bytes, 0, bytes.Length);
+            }
+            else
+            {
+                for (int i = 0; i < bytes.Length; i++)
+                {
+                    bytes[i] = value;
+                }
             }
         }
 

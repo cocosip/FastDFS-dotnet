@@ -78,8 +78,10 @@ namespace FastDFS.Client.Tests.DependencyInjection
         }
 
         [Fact]
-        public void Validate_WithNonDefaultNetworkTimeout_ShouldThrowArgumentException()
+        public void Validate_WithNonDefaultNetworkTimeout_ShouldNotThrow()
         {
+            // NetworkTimeout is now a compatibility-only setting that no longer throws
+            // when a non-default value is used. Users should use ConnectionPool settings instead.
             var config = new FastDFSConfiguration
             {
                 TrackerServers = new List<string> { "127.0.0.1:22122" },
@@ -89,8 +91,7 @@ namespace FastDFS.Client.Tests.DependencyInjection
 
             var act = () => config.Validate();
 
-            act.Should().Throw<ArgumentException>()
-                .WithParameterName("NetworkTimeout");
+            act.Should().NotThrow();
         }
 
         [Fact]

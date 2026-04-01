@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace FastDFS.Client.Connection
 {
     /// <summary>
     /// Provides connection pools for FastDFS server endpoints.
     /// </summary>
-    public interface IConnectionPoolProvider : IDisposable
+    public interface IConnectionPoolProvider : IDisposable, IAsyncDisposable
     {
         /// <summary>
         /// Gets an existing connection pool for the specified endpoint or creates one if it does not exist.
