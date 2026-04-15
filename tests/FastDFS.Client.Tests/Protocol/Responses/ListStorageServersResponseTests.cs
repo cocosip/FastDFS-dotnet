@@ -88,6 +88,36 @@ namespace FastDFS.Client.Tests.Protocol.Responses
             server.FreeMB.Should().Be(512);
         }
 
+        [Fact]
+        public void Decode_With592ByteServerBlock_ShouldParseSuccessfully()
+        {
+            var response = new ListStorageServersResponse();
+            byte[] body = new byte[592];
+            body[0] = (byte)StorageServerStatus.Active;
+            WriteFixedString(body, 1, 16, "192.168.0.12");
+            WriteFixedString(body, 17, 16, "192.168.0.13");
+            WriteFixedString(body, 33, 128, "storage-b.example.com");
+            WriteFixedString(body, 161, 6, "6.11");
+            WriteInt64(body, 167, 1700000000L);
+            WriteInt64(body, 175, 1700000060L);
+            WriteInt64(body, 183, 2048);
+            WriteInt64(body, 191, 1024);
+            WriteInt64(body, 231, 23000);
+            WriteInt64(body, 239, 8080);
+            WriteInt64(body, 375, 1700000120L);
+            WriteInt64(body, 383, 1700000180L);
+
+            var header = new FastDFSHeader(body.Length, 0, 0);
+
+            response.Decode(header, body);
+
+            response.Servers.Should().HaveCount(1);
+            response.Servers[0].Id.Should().Be("192.168.0.12");
+            response.Servers[0].DomainName.Should().Be("storage-b.example.com");
+            response.Servers[0].TotalMB.Should().Be(2048);
+            response.Servers[0].FreeMB.Should().Be(1024);
+        }
+
         private static void WriteFixedString(byte[] buffer, int offset, int length, string value)
         {
             var bytes = System.Text.Encoding.UTF8.GetBytes(value);

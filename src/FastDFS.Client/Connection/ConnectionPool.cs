@@ -203,7 +203,12 @@ namespace FastDFS.Client.Connection
         /// <returns>A new connected FastDFS connection.</returns>
         private async Task<FastDFSConnection> CreateConnectionAsync(CancellationToken cancellationToken)
         {
-            var connection = new FastDFSConnection(_host, _port, _options.SendTimeout, _options.ReceiveTimeout);
+            var connection = new FastDFSConnection(
+                _host,
+                _port,
+                connectTimeout: _options.ConnectionTimeout,
+                sendTimeout: _options.SendTimeout,
+                receiveTimeout: _options.ReceiveTimeout);
 
             try
             {

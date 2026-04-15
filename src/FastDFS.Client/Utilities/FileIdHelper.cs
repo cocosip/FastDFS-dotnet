@@ -26,41 +26,33 @@ namespace FastDFS.Client.Utilities
             if (string.IsNullOrEmpty(fileId))
                 throw new ArgumentException("File ID cannot be null or empty.", nameof(fileId));
 
-            // Check if file ID contains a group name (format: group_name/path/filename)
-            int firstSlashIndex = fileId.IndexOf('/');
-
-            if (firstSlashIndex > 0 && firstSlashIndex < fileId.Length - 1)
+            if (LooksLikeStoragePath(fileId))
             {
-                // File ID contains '/'; extract potential group name
-                string potentialGroupName = fileId.Substring(0, firstSlashIndex);
-                string potentialFileName = fileId.Substring(firstSlashIndex + 1);
+                if (string.IsNullOrEmpty(defaultGroupName))
+                    throw new ArgumentException($"File ID appears to be in simple format (without group name): {fileId}. Please provide a default group name.", nameof(fileId));
 
-                // Heuristic: If the first part looks like a group name (not starting with M or data),
-                // treat it as full format; otherwise treat as simple format
-                if (IsLikelyGroupName(potentialGroupName))
+                groupName = defaultGroupName!;
+                fileName = fileId;
+            }
+            else
+            {
+                // Check if file ID contains a group name (format: group_name/path/filename)
+                int firstSlashIndex = fileId.IndexOf('/');
+
+                if (firstSlashIndex > 0 && firstSlashIndex < fileId.Length - 1)
                 {
-                    // Full format: "group1/M00/00/00/xxx.jpg"
-                    groupName = potentialGroupName;
-                    fileName = potentialFileName;
+                    groupName = fileId.Substring(0, firstSlashIndex);
+                    fileName = fileId.Substring(firstSlashIndex + 1);
                 }
                 else
                 {
-                    // Simple format: "M00/00/00/xxx.jpg"
+                    // No '/' found; assume simple format without path separators (rare case)
                     if (string.IsNullOrEmpty(defaultGroupName))
-                        throw new ArgumentException($"File ID appears to be in simple format (without group name): {fileId}. Please provide a default group name.", nameof(fileId));
+                        throw new ArgumentException($"File ID does not contain group name: {fileId}. Please provide a default group name.", nameof(fileId));
 
                     groupName = defaultGroupName!;
                     fileName = fileId;
                 }
-            }
-            else
-            {
-                // No '/' found; assume simple format without path separators (rare case)
-                if (string.IsNullOrEmpty(defaultGroupName))
-                    throw new ArgumentException($"File ID does not contain group name: {fileId}. Please provide a default group name.", nameof(fileId));
-
-                groupName = defaultGroupName!;
-                fileName = fileId;
             }
 
             if (string.IsNullOrEmpty(groupName))
@@ -69,28 +61,48 @@ namespace FastDFS.Client.Utilities
                 throw new ArgumentException("File name cannot be empty.", nameof(fileId));
         }
 
-        /// <summary>
-        /// Checks if a string looks like a FastDFS group name.
-        /// Group names typically:
-        /// - Don't start with 'M' (which indicates store path like M00, M01)
-        /// - Don't start with 'data' (another store path indicator)
-        /// - Contain alphanumeric characters, possibly with underscore/hyphen
-        /// </summary>
-        private static bool IsLikelyGroupName(string str)
+        private static bool LooksLikeStoragePath(string str)
         {
             if (string.IsNullOrEmpty(str))
                 return false;
 
+            int firstSlashIndex = str.IndexOf('/');
+            string firstSegment = firstSlashIndex >= 0 ? str.Substring(0, firstSlashIndex) : str;
+
             // Store paths typically start with M followed by digits (M00, M01, etc.)
-            if (str.Length >= 2 && str[0] == 'M' && char.IsDigit(str[1]))
-                return false;
+            if (firstSegment.Length >= 2
+                && firstSegment[0] == 'M'
+                && char.IsDigit(firstSegment[1])
+                && HasOnlyDigits(firstSegment, 1))
+                return true;
 
             // Store paths might also be "data" or "data0", "data1"
-            if (str.StartsWith("data", StringComparison.OrdinalIgnoreCase))
+            if (firstSegment.Length == 4 && firstSegment.Equals("data", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return firstSegment.Length > 4
+                && firstSegment.StartsWith("data", StringComparison.OrdinalIgnoreCase)
+                && HasOnlyDigits(firstSegment, 4);
+        }
+
+        private static bool HasOnlyDigits(string value, int startIndex)
+        {
+            for (int i = startIndex; i < value.Length; i++)
+            {
+                if (!char.IsDigit(value[i]))
+                    return false;
+            }
+
+            return value.Length > startIndex;
+        }
+
+        private static bool HasExplicitGroupNamePrefix(string str)
+        {
+            if (string.IsNullOrEmpty(str))
                 return false;
 
-            // If it doesn't look like a store path, assume it's a group name
-            return true;
+            int firstSlashIndex = str.IndexOf('/');
+            return firstSlashIndex > 0 && firstSlashIndex < str.Length - 1 && !LooksLikeStoragePath(str);
         }
 
         /// <summary>
@@ -116,7 +128,7 @@ namespace FastDFS.Client.Utilities
 
             // Check if fileName already has a group name (different from the provided one)
             int firstSlashIndex = fileName.IndexOf('/');
-            if (firstSlashIndex > 0 && IsLikelyGroupName(fileName.Substring(0, firstSlashIndex)))
+            if (HasExplicitGroupNamePrefix(fileName))
             {
                 // FileName already has a group name (possibly different), return as is
                 return fileName;
@@ -140,8 +152,7 @@ namespace FastDFS.Client.Utilities
             if (firstSlashIndex <= 0)
                 return false;
 
-            string potentialGroupName = fileId.Substring(0, firstSlashIndex);
-            return IsLikelyGroupName(potentialGroupName);
+            return HasExplicitGroupNamePrefix(fileId);
         }
 
         /// <summary>

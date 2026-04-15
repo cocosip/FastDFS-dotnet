@@ -393,8 +393,10 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(localFilePath))
                 throw new ArgumentException("Local file path cannot be null or empty.", nameof(localFilePath));
 
-            using var fileStream = CreateFileStream(localFilePath);
-            await DownloadAsync(fileId, fileStream, cancellationToken).ConfigureAwait(false);
+            await DownloadFileCoreAsync(
+                localFilePath,
+                stream => DownloadAsync(fileId, stream, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -418,8 +420,10 @@ namespace FastDFS.Client
             if (string.IsNullOrEmpty(localFilePath))
                 throw new ArgumentException("Local file path cannot be null or empty.", nameof(localFilePath));
 
-            using var fileStream = CreateFileStream(localFilePath);
-            await DownloadAsync(groupName, fileName, fileStream, cancellationToken).ConfigureAwait(false);
+            await DownloadFileCoreAsync(
+                localFilePath,
+                stream => DownloadAsync(groupName, fileName, stream, cancellationToken),
+                cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -442,6 +446,8 @@ namespace FastDFS.Client
         {
             ThrowIfDisposed();
             ParseFileIdWithDefault(fileId, out string groupName, out string fileName);
+            if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset), "Offset cannot be negative.");
+            if (length < 0) throw new ArgumentOutOfRangeException(nameof(length), "Length cannot be negative.");
             return await DownloadCoreAsync(groupName, fileName, offset, length, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1044,13 +1050,74 @@ namespace FastDFS.Client
                 throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
         }
 
+        private async Task DownloadFileCoreAsync(
+            string localFilePath,
+            Func<Stream, Task> downloadAction,
+            CancellationToken cancellationToken)
+        {
+            string tempFilePath = CreateTemporaryDownloadPath(localFilePath);
+
+            try
+            {
+                using (var fileStream = CreateFileStream(tempFilePath))
+                {
+                    await downloadAction(fileStream).ConfigureAwait(false);
+                    await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                ReplaceDownloadedFile(tempFilePath, localFilePath);
+            }
+            catch
+            {
+                TryDeleteFile(tempFilePath);
+                throw;
+            }
+        }
+
         private static FileStream CreateFileStream(string localFilePath)
         {
             var directory = Path.GetDirectoryName(localFilePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            return File.Create(localFilePath);
+            return new FileStream(localFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+        }
+
+        private static string CreateTemporaryDownloadPath(string localFilePath)
+        {
+            var directory = Path.GetDirectoryName(localFilePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
+
+            string fileName = Path.GetFileName(localFilePath);
+            if (string.IsNullOrEmpty(fileName))
+                fileName = "fastdfs-download";
+
+            return Path.Combine(directory ?? string.Empty, $".{fileName}.{Guid.NewGuid():N}.tmp");
+        }
+
+        private static void ReplaceDownloadedFile(string tempFilePath, string localFilePath)
+        {
+            if (File.Exists(localFilePath))
+            {
+                File.Replace(tempFilePath, localFilePath, null);
+                return;
+            }
+
+            File.Move(tempFilePath, localFilePath);
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
         }
 
         private void EnsureHttpConfig()

@@ -124,3 +124,4 @@ ClientBin/
 *.pfx
 *.publishsettings
 orleans.codegen.cs
+*.csproj.lscache

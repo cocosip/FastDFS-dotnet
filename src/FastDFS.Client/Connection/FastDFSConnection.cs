@@ -26,6 +26,7 @@ namespace FastDFS.Client.Connection
         private Socket? _socket;
         private readonly string _host;
         private readonly int _port;
+        private readonly int _connectTimeout;
         private readonly int _sendTimeout;
         private readonly int _receiveTimeout;
         private readonly ILogger _logger;
@@ -103,10 +104,17 @@ namespace FastDFS.Client.Connection
         /// </summary>
         /// <param name="host">The server host.</param>
         /// <param name="port">The server port.</param>
+        /// <param name="connectTimeout">The connect timeout in milliseconds (0 = infinite).</param>
         /// <param name="sendTimeout">The send timeout in milliseconds (0 = infinite).</param>
         /// <param name="receiveTimeout">The receive timeout in milliseconds (0 = infinite).</param>
         /// <param name="logger">Optional logger instance.</param>
-        public FastDFSConnection(string host, int port, int sendTimeout = 30000, int receiveTimeout = 30000, ILogger<FastDFSConnection>? logger = null)
+        public FastDFSConnection(
+            string host,
+            int port,
+            int connectTimeout = 30000,
+            int sendTimeout = 30000,
+            int receiveTimeout = 30000,
+            ILogger<FastDFSConnection>? logger = null)
         {
             if (string.IsNullOrWhiteSpace(host))
                 throw new ArgumentException("Host cannot be null or empty.", nameof(host));
@@ -115,6 +123,7 @@ namespace FastDFS.Client.Connection
 
             _host = host;
             _port = port;
+            _connectTimeout = connectTimeout;
             _sendTimeout = sendTimeout;
             _receiveTimeout = receiveTimeout;
             _logger = logger ?? NullLogger<FastDFSConnection>.Instance;
@@ -142,20 +151,11 @@ namespace FastDFS.Client.Connection
             {
                 _logger.LogDebug("Resolving DNS for {Host}...", _host);
 
-                // Resolve DNS asynchronously with timeout protection
-                // Dns.GetHostAddressesAsync doesn't have built-in timeout on some platforms
-                using var dnsTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, dnsTimeoutCts.Token);
-                
-                Task<IPAddress[]> dnsTask = Dns.GetHostAddressesAsync(_host);
-                Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(30), linkedCts.Token);
-                
-                if (await Task.WhenAny(dnsTask, timeoutTask).ConfigureAwait(false) == timeoutTask)
-                {
-                    throw new TimeoutException($"DNS resolution timed out for {_host} after 30 seconds.");
-                }
-                
-                var addresses = await dnsTask.ConfigureAwait(false);
+                var addresses = await WaitWithTimeoutAsync(
+                    Dns.GetHostAddressesAsync(_host),
+                    _connectTimeout,
+                    $"DNS resolution for {_host}",
+                    cancellationToken).ConfigureAwait(false);
                 if (addresses == null || addresses.Length == 0)
                     throw new SocketException((int)SocketError.HostNotFound);
 
@@ -174,20 +174,14 @@ namespace FastDFS.Client.Connection
                     ReceiveBufferSize = 64 * 1024 // 64KB receive buffer
                 };
 
-                // Set timeouts
-                if (_sendTimeout > 0)
-                    _socket.SendTimeout = _sendTimeout;
-                if (_receiveTimeout > 0)
-                    _socket.ReceiveTimeout = _receiveTimeout;
-
                 _logger.LogDebug("Connecting to {Endpoint} (IP: {IP})...", RemoteEndpoint, address);
 
-                // Connect asynchronously; register cancellation to abort the underlying socket
                 var endpoint = new IPEndPoint(address, _port);
-                using (cancellationToken.Register(static state => ((FastDFSConnection)state!).AbortForCancellation(), this))
-                {
-                    await _socket.ConnectAsync(endpoint).ConfigureAwait(false);
-                }
+                await ExecuteSocketOperationAsync(
+                    () => _socket.ConnectAsync(endpoint),
+                    _connectTimeout,
+                    "Connect",
+                    cancellationToken).ConfigureAwait(false);
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -647,20 +641,21 @@ namespace FastDFS.Client.Connection
             if (_socket == null || !_socket.Connected)
                 throw new InvalidOperationException("Socket is not connected.");
 
-            using (cancellationToken.Register(static state => ((FastDFSConnection)state!).AbortForCancellation(), this))
+            int totalSent = 0;
+            while (totalSent < count)
             {
-                int totalSent = 0;
-                while (totalSent < count)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var segment = new ArraySegment<byte>(buffer, offset + totalSent, count - totalSent);
-                    int sent = await _socket.SendAsync(segment, SocketFlags.None).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                var segment = new ArraySegment<byte>(buffer, offset + totalSent, count - totalSent);
+                int sent = await ExecuteSocketOperationAsync(
+                    () => _socket.SendAsync(segment, SocketFlags.None),
+                    _sendTimeout,
+                    "Send",
+                    cancellationToken).ConfigureAwait(false);
 
-                    if (sent == 0)
-                        throw new SocketException((int)SocketError.ConnectionReset);
+                if (sent == 0)
+                    throw new SocketException((int)SocketError.ConnectionReset);
 
-                    totalSent += sent;
-                }
+                totalSent += sent;
             }
         }
  
@@ -680,23 +675,112 @@ namespace FastDFS.Client.Connection
             if (_socket == null || !_socket.Connected)
                 throw new InvalidOperationException("Socket is not connected.");
 
-            // netstandard2.0: register cancellation via socket abort
-            using (cancellationToken.Register(static state => ((FastDFSConnection)state!).AbortForCancellation(), this))
+            int totalRead = 0;
+            while (totalRead < count)
             {
-                int totalRead = 0;
-                while (totalRead < count)
+                cancellationToken.ThrowIfCancellationRequested();
+                var segment = new ArraySegment<byte>(buffer, offset + totalRead, count - totalRead);
+                int bytesRead = await ExecuteSocketOperationAsync(
+                    () => _socket.ReceiveAsync(segment, SocketFlags.None),
+                    _receiveTimeout,
+                    "Receive",
+                    cancellationToken).ConfigureAwait(false);
+
+                if (bytesRead == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var segment = new ArraySegment<byte>(buffer, offset + totalRead, count - totalRead);
-                    int bytesRead = await _socket.ReceiveAsync(segment, SocketFlags.None).ConfigureAwait(false);
+                    throw new EndOfStreamException(
+                        $"Connection closed unexpectedly. Expected {count} bytes but received {totalRead} bytes.");
+                }
 
-                    if (bytesRead == 0)
-                    {
-                        throw new EndOfStreamException(
-                            $"Connection closed unexpectedly. Expected {count} bytes but received {totalRead} bytes.");
-                    }
+                totalRead += bytesRead;
+            }
+        }
 
-                    totalRead += bytesRead;
+        private async Task WaitWithTimeoutAsync(Task operation, int timeoutMilliseconds, string operationName, CancellationToken cancellationToken)
+        {
+            if (timeoutMilliseconds <= 0)
+            {
+                await operation.ConfigureAwait(false);
+                return;
+            }
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Task timeoutTask = Task.Delay(timeoutMilliseconds, linkedCts.Token);
+            Task completedTask = await Task.WhenAny(operation, timeoutTask).ConfigureAwait(false);
+
+            if (completedTask == timeoutTask)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new TimeoutException($"{operationName} timed out after {timeoutMilliseconds} ms.");
+            }
+
+            linkedCts.Cancel();
+            await operation.ConfigureAwait(false);
+        }
+
+        private async Task<T> WaitWithTimeoutAsync<T>(Task<T> operation, int timeoutMilliseconds, string operationName, CancellationToken cancellationToken)
+        {
+            if (timeoutMilliseconds <= 0)
+                return await operation.ConfigureAwait(false);
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            Task timeoutTask = Task.Delay(timeoutMilliseconds, linkedCts.Token);
+            Task completedTask = await Task.WhenAny(operation, timeoutTask).ConfigureAwait(false);
+
+            if (completedTask == timeoutTask)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new TimeoutException($"{operationName} timed out after {timeoutMilliseconds} ms.");
+            }
+
+            linkedCts.Cancel();
+            return await operation.ConfigureAwait(false);
+        }
+
+        private async Task ExecuteSocketOperationAsync(Func<Task> operation, int timeoutMilliseconds, string operationName, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = timeoutMilliseconds > 0 ? new CancellationTokenSource(timeoutMilliseconds) : null;
+            using var linkedCts = timeoutCts != null
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            using (linkedCts.Token.Register(static state => ((FastDFSConnection)state!).AbortForCancellation(), this))
+            {
+                try
+                {
+                    await operation().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (timeoutCts?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested && (ex is SocketException || ex is ObjectDisposedException))
+                {
+                    throw new TimeoutException($"{operationName} operation to {RemoteEndpoint} timed out after {timeoutMilliseconds} ms.", ex);
+                }
+                catch (Exception ex) when (cancellationToken.IsCancellationRequested && (ex is SocketException || ex is ObjectDisposedException))
+                {
+                    throw new OperationCanceledException($"{operationName} operation to {RemoteEndpoint} was cancelled.", ex, cancellationToken);
+                }
+            }
+        }
+
+        private async Task<T> ExecuteSocketOperationAsync<T>(Func<Task<T>> operation, int timeoutMilliseconds, string operationName, CancellationToken cancellationToken)
+        {
+            using var timeoutCts = timeoutMilliseconds > 0 ? new CancellationTokenSource(timeoutMilliseconds) : null;
+            using var linkedCts = timeoutCts != null
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            using (linkedCts.Token.Register(static state => ((FastDFSConnection)state!).AbortForCancellation(), this))
+            {
+                try
+                {
+                    return await operation().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (timeoutCts?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested && (ex is SocketException || ex is ObjectDisposedException))
+                {
+                    throw new TimeoutException($"{operationName} operation to {RemoteEndpoint} timed out after {timeoutMilliseconds} ms.", ex);
+                }
+                catch (Exception ex) when (cancellationToken.IsCancellationRequested && (ex is SocketException || ex is ObjectDisposedException))
+                {
+                    throw new OperationCanceledException($"{operationName} operation to {RemoteEndpoint} was cancelled.", ex, cancellationToken);
                 }
             }
         }

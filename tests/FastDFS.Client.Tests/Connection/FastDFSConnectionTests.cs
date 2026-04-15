@@ -1,5 +1,11 @@
 using FastDFS.Client.Connection;
+using FastDFS.Client.Exceptions;
+using FastDFS.Client.Protocol;
 using FluentAssertions;
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace FastDFS.Client.Tests.Connection
@@ -26,7 +32,7 @@ namespace FastDFS.Client.Tests.Connection
         public void Constructor_WithCustomTimeouts_ShouldInitialize()
         {
             // Arrange & Act
-            using var connection = new FastDFSConnection("localhost", 22122, sendTimeout: 10000, receiveTimeout: 20000);
+            using var connection = new FastDFSConnection("localhost", 22122, connectTimeout: 3000, sendTimeout: 10000, receiveTimeout: 20000);
 
             // Assert
             connection.Should().NotBeNull();
@@ -166,6 +172,50 @@ namespace FastDFS.Client.Tests.Connection
         {
             using var connection = new FastDFSConnection("localhost", 22122);
             connection.IsPoisoned.Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task SendRequestAsync_WhenReceiveTimesOut_ShouldWrapTimeoutInFastDFSNetworkException()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            try
+            {
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                Task serverTask = Task.Run(async () =>
+                {
+                    using TcpClient serverClient = await listener.AcceptTcpClientAsync();
+                    await Task.Delay(500);
+                });
+
+                using var connection = new FastDFSConnection("127.0.0.1", port, connectTimeout: 1000, sendTimeout: 1000, receiveTimeout: 100);
+                await connection.ConnectAsync();
+
+                var exception = await Assert.ThrowsAsync<FastDFSNetworkException>(
+                    () => connection.SendRequestAsync<TestRequest, TestResponse>(new TestRequest()));
+
+                exception.InnerException.Should().BeOfType<TimeoutException>();
+                await serverTask;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private sealed class TestRequest : FastDFSRequest<TestResponse>
+        {
+            public override byte Command => 1;
+
+            protected override byte[]? EncodeBody()
+            {
+                return null;
+            }
+        }
+
+        private sealed class TestResponse : FastDFSResponse
+        {
         }
 
         // Note: Actual connection tests require a running FastDFS server

@@ -15,9 +15,7 @@ namespace FastDFS.Client.Protocol.Responses
     /// </summary>
     public class ListStorageServersResponse : FastDFSResponse
     {
-        // Each storage server info block size (this may vary by FastDFS version)
-        // Common sizes: 592, 600, or similar - needs to be determined from actual protocol
-        private const int ServerInfoBlockSize = 600;
+        private static readonly int[] SupportedServerInfoBlockSizes = { 600, 592 };
 
         /// <summary>
         /// Gets the list of storage server details.
@@ -36,20 +34,32 @@ namespace FastDFS.Client.Protocol.Responses
                 return;
             }
 
-            if (body.Length % ServerInfoBlockSize != 0)
+            int serverInfoBlockSize = GetServerInfoBlockSize(body.Length);
+            if (serverInfoBlockSize == 0)
             {
                 throw new FastDFSProtocolException(
-                    $"Invalid storage server list response length {body.Length.ToString(CultureInfo.InvariantCulture)}. Expected a multiple of {ServerInfoBlockSize.ToString(CultureInfo.InvariantCulture)} bytes.");
+                    $"Invalid storage server list response length {body.Length.ToString(CultureInfo.InvariantCulture)}. Expected a multiple of {string.Join(" or ", SupportedServerInfoBlockSizes)} bytes.");
             }
 
-            int serverCount = body.Length / ServerInfoBlockSize;
+            int serverCount = body.Length / serverInfoBlockSize;
             Servers = new List<StorageServerDetail>(serverCount);
 
             for (int i = 0; i < serverCount; i++)
             {
-                int offset = i * ServerInfoBlockSize;
+                int offset = i * serverInfoBlockSize;
                 Servers.Add(ParseServer(body, offset, i));
             }
+        }
+
+        private static int GetServerInfoBlockSize(int bodyLength)
+        {
+            foreach (int blockSize in SupportedServerInfoBlockSizes)
+            {
+                if (bodyLength % blockSize == 0)
+                    return blockSize;
+            }
+
+            return 0;
         }
 
         private static StorageServerDetail ParseServer(byte[] body, int offset, int index)
