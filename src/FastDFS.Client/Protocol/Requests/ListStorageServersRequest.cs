@@ -1,5 +1,5 @@
 using System;
-using System.Text;
+using FastDFS.Client.Protocol.Encoding;
 using FastDFS.Client.Protocol.Responses;
 
 namespace FastDFS.Client.Protocol.Requests
@@ -10,8 +10,6 @@ namespace FastDFS.Client.Protocol.Requests
     /// </summary>
     public class ListStorageServersRequest : FastDFSRequest<ListStorageServersResponse>
     {
-        private const int GroupNameLength = 16;
-
         /// <summary>
         /// Gets or sets the group name to query.
         /// </summary>
@@ -36,25 +34,24 @@ namespace FastDFS.Client.Protocol.Requests
         /// </summary>
         protected override byte[]? EncodeBody()
         {
-            if (string.IsNullOrWhiteSpace(GroupName))
-                throw new ArgumentException("GroupName is required.", nameof(GroupName));
-
-            // Body can be 16 bytes (group only) or 32 bytes (group + server ID)
-            var bodyLength = string.IsNullOrWhiteSpace(StorageServerId) ? GroupNameLength : GroupNameLength * 2;
+            var groupName = Domain.Identifiers.GroupName.Create(this.GroupName).Value;
+            var hasStorageServerId = !string.IsNullOrWhiteSpace(StorageServerId);
+            var bodyLength = hasStorageServerId
+                ? FastDFSConstants.GroupNameMaxLength + FastDFSConstants.StorageIdMaxLength
+                : FastDFSConstants.GroupNameMaxLength;
             var body = new byte[bodyLength];
 
-            int offset = 0;
+            ProtocolFieldWriter.WriteFixedUtf8(body, 0, FastDFSConstants.GroupNameMaxLength, "groupName", groupName);
 
-            // GroupName (16 bytes, fixed length, padded with \0)
-            var groupNameBytes = System.Text.Encoding.UTF8.GetBytes(GroupName);
-            Array.Copy(groupNameBytes, 0, body, offset, Math.Min(groupNameBytes.Length, GroupNameLength));
-            offset += GroupNameLength;
-
-            // StorageServerId (16 bytes, optional)
-            if (!string.IsNullOrWhiteSpace(StorageServerId))
+            if (hasStorageServerId)
             {
-            var serverIdBytes = System.Text.Encoding.UTF8.GetBytes(StorageServerId);
-                Array.Copy(serverIdBytes, 0, body, offset, Math.Min(serverIdBytes.Length, GroupNameLength));
+                var storageServerId = Domain.Identifiers.StorageServerId.Create(StorageServerId!).Value;
+                ProtocolFieldWriter.WriteFixedUtf8(
+                    body,
+                    FastDFSConstants.GroupNameMaxLength,
+                    FastDFSConstants.StorageIdMaxLength,
+                    "storageServerId",
+                    storageServerId);
             }
 
             return body;
