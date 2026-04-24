@@ -46,14 +46,14 @@ namespace FastDFS.Client.Protocol.Requests
             int offset = 0;
 
             // GroupName (16 bytes, fixed length, padded with \0)
-            var groupNameBytes = Encoding.UTF8.GetBytes(GroupName);
+            var groupNameBytes = System.Text.Encoding.UTF8.GetBytes(GroupName);
             Array.Copy(groupNameBytes, 0, body, offset, Math.Min(groupNameBytes.Length, GroupNameLength));
             offset += GroupNameLength;
 
             // StorageServerId (16 bytes, optional)
             if (!string.IsNullOrWhiteSpace(StorageServerId))
             {
-                var serverIdBytes = Encoding.UTF8.GetBytes(StorageServerId);
+            var serverIdBytes = System.Text.Encoding.UTF8.GetBytes(StorageServerId);
                 Array.Copy(serverIdBytes, 0, body, offset, Math.Min(serverIdBytes.Length, GroupNameLength));
             }
 

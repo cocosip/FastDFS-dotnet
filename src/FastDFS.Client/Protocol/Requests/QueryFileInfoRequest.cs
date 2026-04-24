@@ -40,7 +40,7 @@ namespace FastDFS.Client.Protocol.Requests
             if (string.IsNullOrEmpty(FileName))
                 throw new ArgumentException("File name cannot be null or empty.", nameof(FileName));
 
-            var fileNameBytes = Encoding.UTF8.GetBytes(FileName);
+            var fileNameBytes = System.Text.Encoding.UTF8.GetBytes(FileName);
             var bodyLength = FastDFSConstants.GroupNameMaxLength + fileNameBytes.Length;
             var body = new byte[bodyLength];
 

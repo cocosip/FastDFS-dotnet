@@ -24,10 +24,10 @@ namespace FastDFS.Client.Tests.Protocol.Responses
 
             // Group name: "group1" padded to 16 bytes
             string groupName = "group1";
-            Encoding.UTF8.GetBytes(groupName).CopyTo(body, 0);
+            System.Text.Encoding.UTF8.GetBytes(groupName).CopyTo(body, 0);
 
             // File name: exact length, no padding
-            Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
+            System.Text.Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
 
             // Act
             response.Decode(header, body);
@@ -49,11 +49,11 @@ namespace FastDFS.Client.Tests.Protocol.Responses
             byte[] body = new byte[16 + fileName.Length];
 
             // Group name with padding
-            Encoding.UTF8.GetBytes("g1").CopyTo(body, 0);
+            System.Text.Encoding.UTF8.GetBytes("g1").CopyTo(body, 0);
             // Rest is null bytes (already zeroed)
 
             // File name (exact length)
-            Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
+            System.Text.Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
 
             // Act
             response.Decode(header, body);
@@ -86,8 +86,8 @@ namespace FastDFS.Client.Tests.Protocol.Responses
             var header = new FastDFSHeader(16 + fileName.Length, 0, 0);
 
             byte[] body = new byte[16 + fileName.Length];
-            Encoding.UTF8.GetBytes("group1").CopyTo(body, 0);
-            Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
+            System.Text.Encoding.UTF8.GetBytes("group1").CopyTo(body, 0);
+            System.Text.Encoding.UTF8.GetBytes(fileName).CopyTo(body, 16);
 
             // Act
             response.Decode(header, body);

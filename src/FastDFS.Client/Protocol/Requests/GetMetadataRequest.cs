@@ -41,14 +41,14 @@ namespace FastDFS.Client.Protocol.Requests
             if (string.IsNullOrWhiteSpace(FileName))
                 throw new ArgumentException("FileName is required.", nameof(FileName));
 
-            var fileNameBytes = Encoding.UTF8.GetBytes(FileName);
+            var fileNameBytes = System.Text.Encoding.UTF8.GetBytes(FileName);
             var bodyLength = GroupNameLength + fileNameBytes.Length;
             var body = new byte[bodyLength];
 
             int offset = 0;
 
             // GroupName (16 bytes, fixed length, padded with \0)
-            var groupNameBytes = Encoding.UTF8.GetBytes(GroupName);
+            var groupNameBytes = System.Text.Encoding.UTF8.GetBytes(GroupName);
             Array.Copy(groupNameBytes, 0, body, offset, Math.Min(groupNameBytes.Length, GroupNameLength));
             offset += GroupNameLength;
 

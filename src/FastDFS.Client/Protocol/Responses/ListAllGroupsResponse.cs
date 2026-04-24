@@ -44,7 +44,7 @@ namespace FastDFS.Client.Protocol.Responses
                 var groupInfo = new GroupInfo
                 {
                     // Group name (16 bytes, fixed length)
-                    GroupName = body.ReadFixedString(offset, 16, Encoding.UTF8).TrimEnd('\0'),
+                    GroupName = body.ReadFixedString(offset, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
 
                     // Total disk space (8 bytes, MB)
                     TotalMB = ByteConverter.ToInt64(body, offset + 16),

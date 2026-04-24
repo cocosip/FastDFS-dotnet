@@ -42,7 +42,7 @@ namespace FastDFS.Client.Protocol.Requests
             if (Content == null || Content.Length == 0)
                 throw new ArgumentException("Content cannot be null or empty.", nameof(Content));
 
-            var fileNameBytes = Encoding.UTF8.GetBytes(FileName);
+            var fileNameBytes = System.Text.Encoding.UTF8.GetBytes(FileName);
             var bodyLength = 8 + 8 + fileNameBytes.Length + Content.Length;
             var body = new byte[bodyLength];
 

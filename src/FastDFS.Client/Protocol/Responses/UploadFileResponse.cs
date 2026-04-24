@@ -41,13 +41,13 @@ namespace FastDFS.Client.Protocol.Responses
             int offset = 0;
 
             // Group name (16 bytes, fixed)
-            GroupName = Encoding.UTF8.GetString(body, offset, FastDFSConstants.GroupNameMaxLength).TrimEnd('\0');
+            GroupName = System.Text.Encoding.UTF8.GetString(body, offset, FastDFSConstants.GroupNameMaxLength).TrimEnd('\0');
             offset += FastDFSConstants.GroupNameMaxLength;
 
             // File name (remaining bytes)
             if (body.Length > offset)
             {
-                FileName = Encoding.UTF8.GetString(body, offset, body.Length - offset);
+            FileName = System.Text.Encoding.UTF8.GetString(body, offset, body.Length - offset);
             }
         }
 

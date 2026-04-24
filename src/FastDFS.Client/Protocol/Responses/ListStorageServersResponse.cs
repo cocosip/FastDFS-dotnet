@@ -74,10 +74,10 @@ namespace FastDFS.Client.Protocol.Responses
                 var server = new StorageServerDetail
                 {
                     Status = (StorageServerStatus)body[offset],
-                    Id = body.ReadFixedString(offset + 1, 16, Encoding.UTF8).TrimEnd('\0'),
-                    SourceIpAddress = body.ReadFixedString(offset + 17, 16, Encoding.UTF8).TrimEnd('\0'),
-                    DomainName = body.ReadFixedString(offset + 33, 128, Encoding.UTF8).TrimEnd('\0'),
-                    Version = body.ReadFixedString(offset + 161, 6, Encoding.UTF8).TrimEnd('\0'),
+                    Id = body.ReadFixedString(offset + 1, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
+                    SourceIpAddress = body.ReadFixedString(offset + 17, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
+                    DomainName = body.ReadFixedString(offset + 33, 128, System.Text.Encoding.UTF8).TrimEnd('\0'),
+                    Version = body.ReadFixedString(offset + 161, 6, System.Text.Encoding.UTF8).TrimEnd('\0'),
                     JoinTime = joinTime.UtcDateTime,
                     LastHeartbeatTime = lastHeartbeatTime.UtcDateTime,
                     TotalMB = ByteConverter.ToInt64(body, offset + 183),

@@ -1,5 +1,7 @@
 using System;
-namespace FastDFS.Client.Protocol
+using System.Text;
+
+namespace FastDFS.Client.Protocol.Encoding
 {
     /// <summary>
     /// Guards UTF-8 encoded values before writing them into fixed-width FastDFS fields.
