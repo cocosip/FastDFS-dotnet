@@ -81,6 +81,28 @@ namespace FastDFS.Client.Tests
             exception.ParamName.Should().Be("length");
         }
 
+        [Fact]
+        public async Task UploadFileAsync_WithExtensionlessLocalFile_ShouldPassEmptyExtensionToStorageClient()
+        {
+            string tempDirectory = CreateTempDirectory();
+            try
+            {
+                string localFilePath = Path.Combine(tempDirectory, "README");
+                await File.WriteAllTextAsync(localFilePath, "payload");
+                var storage = new CapturingStorageClient();
+
+                using var client = CreateClient(storage);
+
+                await client.UploadFileAsync("group1", localFilePath);
+
+                storage.LastFileExtension.Should().Be(string.Empty);
+            }
+            finally
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+
         private static FastDFSClient CreateClient(IStorageClient storageClient)
         {
             return new FastDFSClient(new StubTrackerClient(), storageClient);
@@ -104,12 +126,12 @@ namespace FastDFS.Client.Tests
 
             public Task<StorageServerInfo> QueryStorageForUploadAsync(string? groupName = null, CancellationToken cancellationToken = default)
             {
-                throw new NotSupportedException();
+                return Task.FromResult(Server);
             }
 
             public Task<List<StorageServerInfo>> QueryAllStoragesForUploadAsync(string? groupName = null, CancellationToken cancellationToken = default)
             {
-                throw new NotSupportedException();
+                return Task.FromResult(new List<StorageServerInfo> { Server });
             }
 
             public Task<StorageServerInfo> QueryStorageForDownloadAsync(string groupName, string fileName, CancellationToken cancellationToken = default)
@@ -186,6 +208,27 @@ namespace FastDFS.Client.Tests
             {
                 await destination.WriteAsync(_content, 0, _content.Length, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        private sealed class CapturingStorageClient : IStorageClient
+        {
+            public string? LastFileExtension { get; private set; }
+
+            public Task<string> UploadAsync(StorageServerInfo server, Stream contentStream, long contentLength, string fileExtension, CancellationToken cancellationToken = default)
+            {
+                LastFileExtension = fileExtension;
+                return Task.FromResult("group1/M00/00/00/file");
+            }
+
+            public Task<string> UploadAsync(StorageServerInfo server, byte[] content, string fileExtension, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<string> UploadAppenderFileAsync(StorageServerInfo server, byte[] content, string fileExtension, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task AppendFileAsync(StorageServerInfo server, string fileName, byte[] content, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<byte[]> DownloadAsync(StorageServerInfo server, string groupName, string fileName, long offset, long length, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task DownloadAsync(StorageServerInfo server, string groupName, string fileName, Stream destination, long offset, long length, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task DeleteAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<FastDFSFileInfo> QueryFileInfoAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task SetMetadataAsync(StorageServerInfo server, string groupName, string fileName, FastDFSMetadata metadata, MetadataFlag flag, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<FastDFSMetadata> GetMetadataAsync(StorageServerInfo server, string groupName, string fileName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         }
     }
 }

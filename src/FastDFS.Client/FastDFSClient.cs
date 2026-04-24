@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
+using FastDFS.Client.Domain.Identifiers;
 using FastDFS.Client.Exceptions;
 using FastDFS.Client.Protocol;
 using FastDFS.Client.Storage;
@@ -139,14 +140,14 @@ namespace FastDFS.Client
             ThrowIfDisposed();
             if (content == null || content.Length == 0)
                 throw new ArgumentException("File content cannot be null or empty.", nameof(content));
-            if (string.IsNullOrEmpty(fileExtension))
-                throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
+
+            var normalizedExtension = FileExtension.Create(fileExtension);
 
             _logger.LogInformation("Uploading file to group '{GroupName}', size={Size} bytes, extension={Extension}",
-                groupName ?? "(auto-select)", content.Length, fileExtension);
+                groupName ?? "(auto-select)", content.Length, normalizedExtension.Value);
 
             var server = await SelectStorageForUploadAsync(groupName, cancellationToken).ConfigureAwait(false);
-            var fileId = await _storageClient.UploadAsync(server, content, fileExtension, cancellationToken).ConfigureAwait(false);
+            var fileId = await _storageClient.UploadAsync(server, content, normalizedExtension.Value, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation("Successfully uploaded file: {FileId}", fileId);
             return fileId;
@@ -213,14 +214,14 @@ namespace FastDFS.Client
                 throw new ArgumentException("Stream must be readable.", nameof(stream));
             if (contentLength <= 0)
                 throw new ArgumentOutOfRangeException(nameof(contentLength), "Content length must be greater than 0.");
-            if (string.IsNullOrEmpty(fileExtension))
-                throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
+
+            var normalizedExtension = FileExtension.Create(fileExtension);
 
             _logger.LogInformation("Uploading stream to group '{GroupName}', size={Size} bytes, extension={Extension}",
-                groupName ?? "(auto-select)", contentLength, fileExtension);
+                groupName ?? "(auto-select)", contentLength, normalizedExtension.Value);
 
             var server = await SelectStorageForUploadAsync(groupName, cancellationToken).ConfigureAwait(false);
-            var fileId = await _storageClient.UploadAsync(server, stream, contentLength, fileExtension, cancellationToken).ConfigureAwait(false);
+            var fileId = await _storageClient.UploadAsync(server, stream, contentLength, normalizedExtension.Value, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation("Successfully uploaded file: {FileId}", fileId);
             return fileId;
@@ -249,9 +250,9 @@ namespace FastDFS.Client
             if (!File.Exists(localFilePath))
                 throw new FileNotFoundException("Local file not found.", localFilePath);
 
-            var fileExtension = Path.GetExtension(localFilePath).TrimStart('.');
+            var fileExtension = Path.GetExtension(localFilePath);
             using var fileStream = File.OpenRead(localFilePath);
-            return await UploadAsync(groupName, fileStream, fileExtension, cancellationToken).ConfigureAwait(false);
+            return await UploadAsync(groupName, fileStream, fileExtension ?? string.Empty, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -276,11 +277,11 @@ namespace FastDFS.Client
             ThrowIfDisposed();
             if (content == null || content.Length == 0)
                 throw new ArgumentException("File content cannot be null or empty.", nameof(content));
-            if (string.IsNullOrEmpty(fileExtension))
-                throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
+
+            var normalizedExtension = FileExtension.Create(fileExtension);
 
             var server = await SelectStorageForUploadAsync(groupName, cancellationToken).ConfigureAwait(false);
-            return await _storageClient.UploadAppenderFileAsync(server, content, fileExtension, cancellationToken).ConfigureAwait(false);
+            return await _storageClient.UploadAppenderFileAsync(server, content, normalizedExtension.Value, cancellationToken).ConfigureAwait(false);
         }
 
         // ==================== Download Operations ====================
