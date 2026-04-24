@@ -1,4 +1,5 @@
 using System;
+using FastDFS.Client.Protocol.Decoding;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
 
@@ -27,25 +28,23 @@ namespace FastDFS.Client.Protocol.Responses
         /// <param name="body">The response body bytes.</param>
         protected override void DecodeBody(byte[]? body)
         {
-            if (body == null || body.Length < ResponseBodyLength)
-            {
-                throw new ArgumentException($"Invalid response body length. Expected at least {ResponseBodyLength} bytes, got {body?.Length ?? 0}.");
-            }
+            ProtocolBlockGuard.EnsureMinimumBodyLength(nameof(QueryFetchResponse), body?.Length ?? 0, ResponseBodyLength);
+            var responseBody = body!;
 
             var serverInfo = new StorageServerInfo();
 
             int offset = 0;
 
             // Group name (16 bytes)
-            serverInfo.GroupName = ByteExtensions.ReadFixedString(body, offset, FastDFSConstants.GroupNameMaxLength);
+            serverInfo.GroupName = ByteExtensions.ReadFixedString(responseBody, offset, FastDFSConstants.GroupNameMaxLength);
             offset += FastDFSConstants.GroupNameMaxLength;
 
             // IP address (15 bytes)
-            serverInfo.IpAddress = ByteExtensions.ReadFixedString(body, offset, FastDFSConstants.IpAddressLength - 1).Trim();
+            serverInfo.IpAddress = ByteExtensions.ReadFixedString(responseBody, offset, FastDFSConstants.IpAddressLength - 1).Trim();
             offset += FastDFSConstants.IpAddressLength - 1;
 
             // Port (8 bytes, big-endian long)
-            long portLong = ByteConverter.ToInt64(body, offset);
+            long portLong = ByteConverter.ToInt64(responseBody, offset);
             serverInfo.Port = (int)portLong;
 
             // Store path index is not returned in fetch query, set to 0
