@@ -25,11 +25,43 @@ namespace FastDFS.Client.Tests.Protocol.Decoding
         }
 
         [Fact]
+        public void EnsureExactBlockMultiple_WithAlignedLength_ShouldNotThrow()
+        {
+            Action act = () => ProtocolBlockGuard.EnsureExactBlockMultiple("QueryStoreAllResponse", 80, 40);
+
+            act.Should().NotThrow();
+        }
+
+        [Fact]
+        public void EnsureExactBlockMultiple_WithNonPositiveBlockSize_ShouldThrowArgumentOutOfRangeException()
+        {
+            Action act = () => ProtocolBlockGuard.EnsureExactBlockMultiple("QueryStoreAllResponse", 40, 0);
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
+        }
+
+        [Fact]
         public void ResolveSupportedBlockSize_WithSupported592ByteLength_ShouldReturn592()
         {
             int blockSize = ProtocolBlockGuard.ResolveSupportedBlockSize("ListStorageServersResponse", 1184, new[] { 600, 592 });
 
             blockSize.Should().Be(592);
+        }
+
+        [Fact]
+        public void ResolveSupportedBlockSize_WithNullSupportedBlockSizes_ShouldThrowArgumentNullException()
+        {
+            Action act = () => ProtocolBlockGuard.ResolveSupportedBlockSize("ListStorageServersResponse", 600, null!);
+
+            act.Should().Throw<ArgumentNullException>();
+        }
+
+        [Fact]
+        public void ResolveSupportedBlockSize_WithNonPositiveSupportedBlockSize_ShouldThrowArgumentOutOfRangeException()
+        {
+            Action act = () => ProtocolBlockGuard.ResolveSupportedBlockSize("ListStorageServersResponse", 600, new[] { 0, 600 });
+
+            act.Should().Throw<ArgumentOutOfRangeException>();
         }
 
         [Fact]

@@ -17,6 +17,9 @@ namespace FastDFS.Client.Protocol.Decoding
 
         public static void EnsureExactBlockMultiple(string responseName, int actualLength, int blockSize)
         {
+            if (blockSize <= 0)
+                throw new ArgumentOutOfRangeException(nameof(blockSize), "Block size must be greater than 0.");
+
             if (actualLength % blockSize != 0)
             {
                 throw new FastDFSProtocolException(
@@ -31,6 +34,9 @@ namespace FastDFS.Client.Protocol.Decoding
 
             foreach (int blockSize in supportedBlockSizes)
             {
+                if (blockSize <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(supportedBlockSizes), "Supported block sizes must be greater than 0.");
+
                 if (actualLength % blockSize == 0)
                     return blockSize;
             }
