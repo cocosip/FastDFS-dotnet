@@ -1,6 +1,7 @@
 using FastDFS.Client.Protocol;
 using FastDFS.Client.Protocol.Requests;
 using FluentAssertions;
+using System;
 using Xunit;
 
 namespace FastDFS.Client.Tests.Protocol.Requests
@@ -55,27 +56,38 @@ namespace FastDFS.Client.Tests.Protocol.Requests
         }
 
         [Fact]
-        public void Encode_WithLongExtension_ShouldTruncateTo6Chars()
+        public void Encode_WithEmptyExtension_ShouldZeroFillExtensionField()
         {
-            // Arrange
             var request = new UploadFileRequest
             {
-                StorePathIndex = 1,
-                FileContent = new byte[] { 0xFF },
-                FileExtension = "verylongext" // More than 6 chars
+                StorePathIndex = 0,
+                FileContent = new byte[] { 0x01 },
+                FileExtension = string.Empty
             };
 
-            // Act
             byte[] encoded = request.Encode();
 
-            // Assert
-            // File extension should be truncated to "verylo"
-            encoded[19].Should().Be((byte)'v');
-            encoded[20].Should().Be((byte)'e');
-            encoded[21].Should().Be((byte)'r');
-            encoded[22].Should().Be((byte)'y');
-            encoded[23].Should().Be((byte)'l');
-            encoded[24].Should().Be((byte)'o');
+            encoded[19].Should().Be(0);
+            encoded[20].Should().Be(0);
+            encoded[21].Should().Be(0);
+            encoded[22].Should().Be(0);
+            encoded[23].Should().Be(0);
+            encoded[24].Should().Be(0);
+        }
+
+        [Fact]
+        public void Encode_WithTooLongExtension_ShouldThrowArgumentException()
+        {
+            var request = new UploadFileRequest
+            {
+                StorePathIndex = 0,
+                FileContent = new byte[] { 0x01 },
+                FileExtension = "verylongext"
+            };
+
+            Action act = () => request.Encode();
+
+            act.Should().Throw<ArgumentException>();
         }
 
         [Fact]

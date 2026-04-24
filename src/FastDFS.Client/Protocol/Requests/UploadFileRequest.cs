@@ -1,5 +1,6 @@
 using System;
-using System.Text;
+using FastDFS.Client.Domain.Identifiers;
+using FastDFS.Client.Protocol.Encoding;
 using FastDFS.Client.Protocol.Responses;
 using FastDFS.Client.Utilities;
 
@@ -45,32 +46,22 @@ namespace FastDFS.Client.Protocol.Requests
             if (FileContent == null || FileContent.Length == 0)
                 throw new ArgumentException("File content cannot be null or empty.", nameof(FileContent));
 
-            // Normalize extension (remove leading dot if present)
-            var extension = FileExtension;
-            if (!string.IsNullOrEmpty(extension) && extension.StartsWith("."))
-            {
-                extension = extension.Substring(1);
-            }
+            var extension = Domain.Identifiers.FileExtension.Create(this.FileExtension).Value;
 
-            // Header: 1 + 8 + 6 = 15 bytes
             var headerSize = 1 + 8 + FastDFSConstants.FileExtNameMaxLength;
             var body = new byte[headerSize + FileContent.Length];
 
             int offset = 0;
 
-            // Store path index (1 byte)
             body[offset] = StorePathIndex;
             offset += 1;
 
-            // File size (8 bytes)
             ByteConverter.WriteInt64(FileContent.Length, body, offset);
             offset += 8;
 
-            // File extension (6 bytes, fixed length)
-            ByteExtensions.CopyFixedString(extension, body, offset, FastDFSConstants.FileExtNameMaxLength);
+            ProtocolFieldWriter.WriteFixedUtf8(body, offset, FastDFSConstants.FileExtNameMaxLength, "fileExtension", extension);
             offset += FastDFSConstants.FileExtNameMaxLength;
 
-            // File content
             Array.Copy(FileContent, 0, body, offset, FileContent.Length);
 
             return body;
