@@ -1,5 +1,6 @@
 using System;
-using System.Text;
+using FastDFS.Client.Domain.Identifiers;
+using FastDFS.Client.Protocol.Encoding;
 using FastDFS.Client.Protocol.Responses;
 using FastDFS.Client.Utilities;
 
@@ -47,11 +48,10 @@ namespace FastDFS.Client.Protocol.Requests
         /// <returns>The encoded body bytes.</returns>
         protected override byte[]? EncodeBody()
         {
-            if (string.IsNullOrEmpty(GroupName))
-                throw new ArgumentException("Group name cannot be null or empty.", nameof(GroupName));
             if (string.IsNullOrEmpty(FileName))
                 throw new ArgumentException("File name cannot be null or empty.", nameof(FileName));
 
+            var groupName = Domain.Identifiers.GroupName.Create(this.GroupName).Value;
             var fileNameBytes = System.Text.Encoding.UTF8.GetBytes(FileName);
             var bodyLength = 8 + 8 + FastDFSConstants.GroupNameMaxLength + fileNameBytes.Length;
             var body = new byte[bodyLength];
@@ -67,7 +67,7 @@ namespace FastDFS.Client.Protocol.Requests
             offset += 8;
 
             // Group name (16 bytes, fixed length)
-            ByteExtensions.CopyFixedString(GroupName, body, offset, FastDFSConstants.GroupNameMaxLength);
+            ProtocolFieldWriter.WriteFixedUtf8(body, offset, FastDFSConstants.GroupNameMaxLength, "groupName", groupName);
             offset += FastDFSConstants.GroupNameMaxLength;
 
             // File name (variable length)
