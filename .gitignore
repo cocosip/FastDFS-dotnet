@@ -31,6 +31,7 @@ bld/
 .vscode/
 
 .claude/
+.worktrees/
 
 # Rider
 .idea/
