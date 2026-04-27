@@ -75,6 +75,7 @@ namespace FastDFS.Client
 
         // name -> logical client instance
         private readonly ConcurrentDictionary<string, IFastDFSClient> _clients = new();
+        private readonly HashSet<string> _registeredClientNames = new(StringComparer.Ordinal);
 
         // Shared connection pool resources keyed by config fingerprint (protected by _lock)
         private readonly Dictionary<string, SharedClientResources> _sharedResources = new();
@@ -109,10 +110,11 @@ namespace FastDFS.Client
             {
                 ThrowIfDisposed();
 
-                if (_options.ContainsKey(name) || _clients.ContainsKey(name))
+                if (_registeredClientNames.Contains(name))
                     RemoveClientInternal(name);
 
                 _options[name] = options;
+                _registeredClientNames.Add(name);
             }
         }
 
@@ -174,10 +176,7 @@ namespace FastDFS.Client
             {
                 ThrowIfDisposed();
 
-                return _options.Keys
-                    .Concat(_clients.Keys)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToList();
+                return _registeredClientNames.ToList();
             }
         }
 
@@ -192,7 +191,7 @@ namespace FastDFS.Client
             lock (_lock)
             {
                 ThrowIfDisposed();
-                return _options.ContainsKey(name) || _clients.ContainsKey(name);
+                return _registeredClientNames.Contains(name);
             }
         }
 
@@ -211,10 +210,11 @@ namespace FastDFS.Client
             {
                 ThrowIfDisposed();
 
-                if (_options.ContainsKey(name) || _clients.ContainsKey(name))
+                if (_registeredClientNames.Contains(name))
                     RemoveClientInternal(name);
 
                 _options[name] = configuration;
+                _registeredClientNames.Add(name);
 
                 var client = GetOrCreateSharedClient(name, configuration);
                 _clients[name] = client;
@@ -273,11 +273,15 @@ namespace FastDFS.Client
         /// </summary>
         private bool RemoveClientInternal(string name)
         {
+            var removed = false;
             var removedClient = _clients.TryRemove(name, out var client);
             var removedConfiguration = _options.TryRemove(name, out _);
+            removed |= _registeredClientNames.Remove(name);
 
             if (!removedClient && !removedConfiguration)
-                return false;
+                return removed;
+
+            removed = true;
 
             try
             {
@@ -312,7 +316,7 @@ namespace FastDFS.Client
                 }
             }
 
-            return true;
+            return removed;
         }
 
         private void ThrowIfDisposed()
@@ -346,6 +350,7 @@ namespace FastDFS.Client
                 _nameToConfigKey.Clear();
                 _clients.Clear();
                 _options.Clear();
+                _registeredClientNames.Clear();
             }
 
             GC.SuppressFinalize(this);
