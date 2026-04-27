@@ -49,6 +49,23 @@ namespace FastDFS.Client.Tests.DependencyInjection
         }
 
         [Fact]
+        public void GetClientNames_AfterConfiguredClientIsDiscovered_ShouldContainName()
+        {
+            var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>
+            {
+                ["cluster-a"] = new FastDFSConfiguration
+                {
+                    TrackerServers = new List<string> { "127.0.0.1:22122" },
+                    ConnectionPool = new ConnectionPoolConfiguration()
+                }
+            });
+
+            factory.HasClient("cluster-a").Should().BeTrue();
+
+            factory.GetClientNames().Should().Contain("cluster-a");
+        }
+
+        [Fact]
         public void GetClientNames_ShouldContainRuntimeRegisteredClient()
         {
             var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>());
@@ -60,6 +77,40 @@ namespace FastDFS.Client.Tests.DependencyInjection
             });
 
             factory.GetClientNames().Should().Contain("runtime");
+        }
+
+        [Fact]
+        public void RemoveClient_WithRuntimeRegisteredClient_ShouldRemoveItFromDiscoveryApis()
+        {
+            var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>());
+
+            factory.RegisterClient("runtime", new FastDFSConfiguration
+            {
+                TrackerServers = new List<string> { "127.0.0.1:22122" },
+                ConnectionPool = new ConnectionPoolConfiguration()
+            });
+
+            factory.RemoveClient("runtime").Should().BeTrue();
+            factory.HasClient("runtime").Should().BeFalse();
+            factory.GetClientNames().Should().NotContain("runtime");
+        }
+
+        [Fact]
+        public void GetClient_WithConfiguredButNotYetCreatedClient_ShouldPreserveDiscoveryVisibility()
+        {
+            var factory = CreateFactory(new Dictionary<string, FastDFSConfiguration>
+            {
+                ["cluster-a"] = new FastDFSConfiguration
+                {
+                    TrackerServers = new List<string> { "127.0.0.1:22122" },
+                    ConnectionPool = new ConnectionPoolConfiguration()
+                }
+            });
+
+            factory.GetClient("cluster-a");
+
+            factory.HasClient("cluster-a").Should().BeTrue();
+            factory.GetClientNames().Should().Contain("cluster-a");
         }
 
         [Fact]

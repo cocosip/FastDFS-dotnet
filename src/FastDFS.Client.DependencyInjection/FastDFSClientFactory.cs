@@ -28,6 +28,7 @@ namespace FastDFS.Client.DependencyInjection
         // name -> logical client instance
         private readonly ConcurrentDictionary<string, IFastDFSClient> _clients;
         private readonly ConcurrentDictionary<string, FastDFSConfiguration> _runtimeConfigurations;
+        private readonly HashSet<string> _registeredClientNames = new(StringComparer.Ordinal);
 
         // Shared connection pool resources keyed by config fingerprint (protected by _lock)
         private readonly Dictionary<string, SharedClientResources> _sharedResources = new();
@@ -100,6 +101,7 @@ namespace FastDFS.Client.DependencyInjection
                 }
 
                 options.Validate();
+                _registeredClientNames.Add(name);
 
                 var client = GetOrCreateSharedClient(name, options);
                 _clients[name] = client;
@@ -116,11 +118,7 @@ namespace FastDFS.Client.DependencyInjection
             lock (_lock)
             {
                 ThrowIfDisposed();
-
-                return _runtimeConfigurations.Keys
-                    .Concat(_clients.Keys)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToList();
+                return _registeredClientNames.ToList();
             }
         }
 
@@ -136,13 +134,25 @@ namespace FastDFS.Client.DependencyInjection
             {
                 ThrowIfDisposed();
 
-                if (_runtimeConfigurations.ContainsKey(name) || _clients.ContainsKey(name))
+                if (_registeredClientNames.Contains(name))
                     return true;
+
+                if (_runtimeConfigurations.ContainsKey(name) || _clients.ContainsKey(name))
+                {
+                    _registeredClientNames.Add(name);
+                    return true;
+                }
 
                 try
                 {
                     var options = _optionsMonitor.Get(name);
-                    return options?.TrackerServers != null && options.TrackerServers.Count > 0;
+                    if (options?.TrackerServers != null && options.TrackerServers.Count > 0)
+                    {
+                        _registeredClientNames.Add(name);
+                        return true;
+                    }
+
+                    return false;
                 }
                 catch
                 {
@@ -175,6 +185,7 @@ namespace FastDFS.Client.DependencyInjection
                 }
 
                 _runtimeConfigurations[name] = configuration;
+                _registeredClientNames.Add(name);
 
                 var client = GetOrCreateSharedClient(name, configuration);
                 _clients[name] = client;
@@ -247,22 +258,26 @@ namespace FastDFS.Client.DependencyInjection
         /// </summary>
         private bool RemoveClientInternal(string name)
         {
-            if (!_clients.TryRemove(name, out var client))
-                return false;
+            var removed = false;
 
-            _logger.LogInformation("Removing FastDFS client '{ClientName}'", name);
+            if (_clients.TryRemove(name, out var client))
+            {
+                removed = true;
+                _logger.LogInformation("Removing FastDFS client '{ClientName}'", name);
 
-            try
-            {
-                (client as IDisposable)?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error disposing FastDFS client '{ClientName}'", name);
+                try
+                {
+                    (client as IDisposable)?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Error disposing FastDFS client '{ClientName}'", name);
+                }
             }
 
             if (_nameToConfigKey.TryGetValue(name, out var configKey))
             {
+                removed = true;
                 _nameToConfigKey.Remove(name);
 
                 var refCount = --_sharedRefCounts[configKey];
@@ -293,8 +308,9 @@ namespace FastDFS.Client.DependencyInjection
                 }
             }
 
-            _runtimeConfigurations.TryRemove(name, out _);
-            return true;
+            removed |= _runtimeConfigurations.TryRemove(name, out _);
+            removed |= _registeredClientNames.Remove(name);
+            return removed;
         }
 
         private void ThrowIfDisposed()
@@ -346,6 +362,7 @@ namespace FastDFS.Client.DependencyInjection
                 _nameToConfigKey.Clear();
                 _clients.Clear();
                 _runtimeConfigurations.Clear();
+                _registeredClientNames.Clear();
             }
 
             _logger.LogInformation("FastDFSClientFactory disposed successfully");
