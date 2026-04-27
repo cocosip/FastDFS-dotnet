@@ -82,5 +82,36 @@ namespace FastDFS.Client.Tests
 
             metadata["key"].Should().Be(string.Empty);
         }
+
+        [Fact]
+        public void Decode_WithBlankKeyRecord_ShouldThrowArgumentException()
+        {
+            byte[] data = System.Text.Encoding.UTF8.GetBytes("\x02value");
+
+            Action act = () => FastDFSMetadata.Decode(data);
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Decode_WithRecordWithoutFieldSeparator_ShouldIgnoreMalformedRecord()
+        {
+            byte[] data = System.Text.Encoding.UTF8.GetBytes("bad-record-without-separator");
+
+            var metadata = FastDFSMetadata.Decode(data);
+
+            metadata.Count.Should().Be(0);
+        }
+
+        [Fact]
+        public void Decode_WithValidMetadata_ShouldRoundTrip()
+        {
+            byte[] data = System.Text.Encoding.UTF8.GetBytes("key\x02value\x01other\x02two");
+
+            var metadata = FastDFSMetadata.Decode(data);
+
+            metadata["key"].Should().Be("value");
+            metadata["other"].Should().Be("two");
+        }
     }
 }

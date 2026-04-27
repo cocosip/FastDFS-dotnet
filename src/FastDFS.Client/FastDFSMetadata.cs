@@ -181,7 +181,7 @@ namespace FastDFS.Client
                     continue;
 
                 int separatorIndex = record.IndexOf('\x02'); // FastDFS_FIELD_SEPERATOR
-                if (separatorIndex <= 0)
+                if (separatorIndex < 0)
                     continue;
 
                 string key = record.Substring(0, separatorIndex);
