@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FastDFS.Client.Protocol.Decoding;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
 
@@ -31,38 +32,25 @@ namespace FastDFS.Client.Protocol.Responses
         {
             if (body == null || body.Length == 0)
             {
-                // No storage servers available
                 ServerInfos = new List<StorageServerInfo>();
                 return;
             }
 
-            if (body.Length % StorageInfoBlockSize != 0)
-            {
-                throw new ArgumentException($"Invalid response body length. Expected multiple of {StorageInfoBlockSize} bytes, got {body.Length}.");
-            }
-
+            ProtocolBlockGuard.EnsureMinimumBodyLength(nameof(QueryFetchAllResponse), body.Length, StorageInfoBlockSize);
+            ProtocolBlockGuard.EnsureExactBlockMultiple(nameof(QueryFetchAllResponse), body.Length, StorageInfoBlockSize);
             int storageCount = body.Length / StorageInfoBlockSize;
             ServerInfos = new List<StorageServerInfo>(storageCount);
 
             for (int i = 0; i < storageCount; i++)
             {
                 int offset = i * StorageInfoBlockSize;
-                var serverInfo = new StorageServerInfo();
-
-                // Group name (16 bytes)
-                serverInfo.GroupName = ByteExtensions.ReadFixedString(body, offset, FastDFSConstants.GroupNameMaxLength);
-                offset += FastDFSConstants.GroupNameMaxLength;
-
-                // IP address (15 bytes)
-                serverInfo.IpAddress = ByteExtensions.ReadFixedString(body, offset, FastDFSConstants.IpAddressLength - 1).Trim();
-                offset += FastDFSConstants.IpAddressLength - 1;
-
-                // Port (8 bytes, big-endian long)
-                long portLong = ByteConverter.ToInt64(body, offset);
-                serverInfo.Port = (int)portLong;
-
-                // Store path index is not returned in fetch query, set to 0
-                serverInfo.StorePathIndex = 0;
+                var serverInfo = new StorageServerInfo
+                {
+                    GroupName = ProtocolFieldReader.ReadFixedUtf8(body, offset, FastDFSConstants.GroupNameMaxLength),
+                    IpAddress = ProtocolFieldReader.ReadFixedUtf8(body, offset + FastDFSConstants.GroupNameMaxLength, FastDFSConstants.IpAddressLength - 1).Trim(),
+                    Port = (int)ByteConverter.ToInt64(body, offset + 31),
+                    StorePathIndex = 0
+                };
 
                 ServerInfos.Add(serverInfo);
             }
