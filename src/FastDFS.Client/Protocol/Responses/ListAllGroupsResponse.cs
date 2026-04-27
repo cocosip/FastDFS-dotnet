@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
+using FastDFS.Client.Protocol.Decoding;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
 
@@ -33,7 +33,8 @@ namespace FastDFS.Client.Protocol.Responses
                 return;
             }
 
-            // Calculate number of groups
+            ProtocolBlockGuard.EnsureMinimumBodyLength(nameof(ListAllGroupsResponse), body.Length, GroupInfoBlockSize);
+            ProtocolBlockGuard.EnsureExactBlockMultiple(nameof(ListAllGroupsResponse), body.Length, GroupInfoBlockSize);
             int groupCount = body.Length / GroupInfoBlockSize;
             Groups = new List<GroupInfo>(groupCount);
 
@@ -43,43 +44,18 @@ namespace FastDFS.Client.Protocol.Responses
 
                 var groupInfo = new GroupInfo
                 {
-                    // Group name (16 bytes, fixed length)
-                    GroupName = body.ReadFixedString(offset, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
-
-                    // Total disk space (8 bytes, MB)
+                    GroupName = ProtocolFieldReader.ReadFixedUtf8(body, offset, 16),
                     TotalMB = ByteConverter.ToInt64(body, offset + 16),
-
-                    // Free disk space (8 bytes, MB)
                     FreeMB = ByteConverter.ToInt64(body, offset + 24),
-
-                    // Trunk free space (8 bytes, MB)
                     TrunkFreeMB = ByteConverter.ToInt64(body, offset + 32),
-
-                    // Storage server count (8 bytes)
                     StorageServerCount = (int)ByteConverter.ToInt64(body, offset + 40),
-
-                    // Storage port (8 bytes)
                     StoragePort = (int)ByteConverter.ToInt64(body, offset + 48),
-
-                    // Storage HTTP port (8 bytes)
                     StorageHttpPort = (int)ByteConverter.ToInt64(body, offset + 56),
-
-                    // Active server count (8 bytes)
                     ActiveServerCount = (int)ByteConverter.ToInt64(body, offset + 64),
-
-                    // Current write server index (8 bytes)
                     CurrentWriteServer = (int)ByteConverter.ToInt64(body, offset + 72),
-
-                    // Store path count (8 bytes)
                     StorePathCount = (int)ByteConverter.ToInt64(body, offset + 80),
-
-                    // Subdir count per path (8 bytes)
                     SubdirCountPerPath = (int)ByteConverter.ToInt64(body, offset + 88),
-
-                    // Current trunk file ID (8 bytes)
                     CurrentTrunkFileId = (int)ByteConverter.ToInt64(body, offset + 96)
-
-                    // Last byte (offset + 104) is reserved/padding
                 };
 
                 Groups.Add(groupInfo);
