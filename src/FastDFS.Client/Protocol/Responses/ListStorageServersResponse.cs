@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Text;
 using FastDFS.Client.Exceptions;
+using FastDFS.Client.Protocol.Decoding;
 using FastDFS.Client.Tracker;
 using FastDFS.Client.Utilities;
 
@@ -34,13 +34,7 @@ namespace FastDFS.Client.Protocol.Responses
                 return;
             }
 
-            int serverInfoBlockSize = GetServerInfoBlockSize(body.Length);
-            if (serverInfoBlockSize == 0)
-            {
-                throw new FastDFSProtocolException(
-                    $"Invalid storage server list response length {body.Length.ToString(CultureInfo.InvariantCulture)}. Expected a multiple of {string.Join(" or ", SupportedServerInfoBlockSizes)} bytes.");
-            }
-
+            int serverInfoBlockSize = ProtocolBlockGuard.ResolveSupportedBlockSize(nameof(ListStorageServersResponse), body.Length, SupportedServerInfoBlockSizes);
             int serverCount = body.Length / serverInfoBlockSize;
             Servers = new List<StorageServerDetail>(serverCount);
 
@@ -49,17 +43,6 @@ namespace FastDFS.Client.Protocol.Responses
                 int offset = i * serverInfoBlockSize;
                 Servers.Add(ParseServer(body, offset, i));
             }
-        }
-
-        private static int GetServerInfoBlockSize(int bodyLength)
-        {
-            foreach (int blockSize in SupportedServerInfoBlockSizes)
-            {
-                if (bodyLength % blockSize == 0)
-                    return blockSize;
-            }
-
-            return 0;
         }
 
         private static StorageServerDetail ParseServer(byte[] body, int offset, int index)
@@ -74,10 +57,10 @@ namespace FastDFS.Client.Protocol.Responses
                 var server = new StorageServerDetail
                 {
                     Status = (StorageServerStatus)body[offset],
-                    Id = body.ReadFixedString(offset + 1, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
-                    SourceIpAddress = body.ReadFixedString(offset + 17, 16, System.Text.Encoding.UTF8).TrimEnd('\0'),
-                    DomainName = body.ReadFixedString(offset + 33, 128, System.Text.Encoding.UTF8).TrimEnd('\0'),
-                    Version = body.ReadFixedString(offset + 161, 6, System.Text.Encoding.UTF8).TrimEnd('\0'),
+                    Id = ProtocolFieldReader.ReadFixedUtf8(body, offset + 1, 16),
+                    SourceIpAddress = ProtocolFieldReader.ReadFixedUtf8(body, offset + 17, 16),
+                    DomainName = ProtocolFieldReader.ReadFixedUtf8(body, offset + 33, 128),
+                    Version = ProtocolFieldReader.ReadFixedUtf8(body, offset + 161, 6),
                     JoinTime = joinTime.UtcDateTime,
                     LastHeartbeatTime = lastHeartbeatTime.UtcDateTime,
                     TotalMB = ByteConverter.ToInt64(body, offset + 183),
@@ -114,7 +97,7 @@ namespace FastDFS.Client.Protocol.Responses
             catch (Exception ex)
             {
                 throw new FastDFSProtocolException(
-                    $"Failed to parse storage server detail block at index {index.ToString(CultureInfo.InvariantCulture)} (offset {offset.ToString(CultureInfo.InvariantCulture)}).",
+                    $"Failed to parse storage server detail block at index {index}.",
                     ex);
             }
         }

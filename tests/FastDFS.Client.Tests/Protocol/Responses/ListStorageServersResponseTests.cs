@@ -1,4 +1,5 @@
 using System;
+using FastDFS.Client.Exceptions;
 using FastDFS.Client.Protocol;
 using FastDFS.Client.Protocol.Responses;
 using FastDFS.Client.Tracker;
@@ -16,22 +17,29 @@ namespace FastDFS.Client.Tests.Protocol.Responses
         [Fact]
         public void Decode_WithInvalidBodyLength_ShouldThrowProtocolException()
         {
-            // Arrange
             var response = new ListStorageServersResponse();
             var header = new FastDFSHeader(1, 0, 0);
             byte[] body = new byte[1];
 
-            // Act
             Action act = () => response.Decode(header, body);
 
-            // Assert
-            act.Should().Throw<FastDFS.Client.Exceptions.FastDFSProtocolException>();
+            act.Should().Throw<FastDFSProtocolException>();
+        }
+
+        [Fact]
+        public void Decode_WithUnsupportedBodyLength_ShouldThrowFastDFSProtocolException()
+        {
+            var response = new ListStorageServersResponse();
+            var header = new FastDFSHeader(601, 93, 0);
+
+            Action act = () => response.Decode(header, new byte[601]);
+
+            act.Should().Throw<FastDFSProtocolException>();
         }
 
         [Fact]
         public void Decode_WithSingleServerBlock_ShouldParseSuccessfully()
         {
-            // Arrange
             var response = new ListStorageServersResponse();
             byte[] body = new byte[600];
             body[0] = (byte)StorageServerStatus.Active;
@@ -70,10 +78,8 @@ namespace FastDFS.Client.Tests.Protocol.Responses
 
             var header = new FastDFSHeader(body.Length, 0, 0);
 
-            // Act
             response.Decode(header, body);
 
-            // Assert
             response.Servers.Should().HaveCount(1);
             var server = response.Servers[0];
             server.Status.Should().Be(StorageServerStatus.Active);
@@ -116,6 +122,32 @@ namespace FastDFS.Client.Tests.Protocol.Responses
             response.Servers[0].DomainName.Should().Be("storage-b.example.com");
             response.Servers[0].TotalMB.Should().Be(2048);
             response.Servers[0].FreeMB.Should().Be(1024);
+        }
+
+        [Fact]
+        public void Decode_WithTwo600ByteBlocks_ShouldParseTwoServers()
+        {
+            var response = new ListStorageServersResponse();
+            byte[] body = new byte[1200];
+
+            body[0] = (byte)StorageServerStatus.Active;
+            WriteFixedString(body, 1, 16, "192.168.0.10");
+            WriteFixedString(body, 17, 16, "192.168.0.11");
+            WriteFixedString(body, 33, 128, "storage-a.example.com");
+            WriteFixedString(body, 161, 6, "6.12");
+
+            int second = 600;
+            body[second] = (byte)StorageServerStatus.Offline;
+            WriteFixedString(body, second + 1, 16, "192.168.0.20");
+            WriteFixedString(body, second + 17, 16, "192.168.0.21");
+            WriteFixedString(body, second + 33, 128, "storage-b.example.com");
+            WriteFixedString(body, second + 161, 6, "6.11");
+
+            response.Decode(new FastDFSHeader(body.Length, 93, 0), body);
+
+            response.Servers.Should().HaveCount(2);
+            response.Servers[1].Id.Should().Be("192.168.0.20");
+            response.Servers[1].DomainName.Should().Be("storage-b.example.com");
         }
 
         private static void WriteFixedString(byte[] buffer, int offset, int length, string value)
