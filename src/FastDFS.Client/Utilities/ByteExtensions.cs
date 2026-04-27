@@ -108,8 +108,14 @@ namespace FastDFS.Client.Utilities
                 return;
 
             var bytes = encoding.GetBytes(str);
-            var copyLength = Math.Min(bytes.Length, length);
-            Array.Copy(bytes, 0, buffer, offset, copyLength);
+            if (bytes.Length > length)
+            {
+                throw new ArgumentException(
+                    $"Value cannot exceed {length} bytes when encoded as {encoding.WebName}. Actual length: {bytes.Length} bytes.",
+                    nameof(str));
+            }
+
+            Array.Copy(bytes, 0, buffer, offset, bytes.Length);
         }
 
         /// <summary>

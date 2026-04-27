@@ -29,6 +29,7 @@ namespace FastDFS.Client
         private readonly StorageSelectionStrategy _selectionStrategy;
         private readonly IStorageSelector? _storageSelector;
         private readonly HttpConfiguration? _httpConfig;
+        private readonly IDisposable? _ownedResource;
         private bool _disposed;
 
         /// <summary>
@@ -41,6 +42,7 @@ namespace FastDFS.Client
         /// <param name="selectionStrategy">The storage selection strategy for client-side load balancing.</param>
         /// <param name="httpConfig">Optional HTTP configuration for generating file access URLs.</param>
         /// <param name="loggerFactory">Optional logger factory for creating loggers.</param>
+        /// <param name="ownedResource">Optional resource owned by this client and disposed with it.</param>
         /// <exception cref="ArgumentNullException">Thrown when trackerClient or storageClient is null.</exception>
         public FastDFSClient(
             ITrackerClient trackerClient,
@@ -49,7 +51,8 @@ namespace FastDFS.Client
             string? defaultGroupName = null,
             StorageSelectionStrategy selectionStrategy = StorageSelectionStrategy.TrackerSelection,
             HttpConfiguration? httpConfig = null,
-            ILoggerFactory? loggerFactory = null)
+            ILoggerFactory? loggerFactory = null,
+            IDisposable? ownedResource = null)
         {
             _trackerClient = trackerClient ?? throw new ArgumentNullException(nameof(trackerClient));
             _storageClient = storageClient ?? throw new ArgumentNullException(nameof(storageClient));
@@ -58,6 +61,7 @@ namespace FastDFS.Client
             _defaultGroupName = defaultGroupName;
             _selectionStrategy = selectionStrategy;
             _httpConfig = httpConfig;
+            _ownedResource = ownedResource;
 
             _storageSelector = selectionStrategy switch
             {
@@ -1170,6 +1174,12 @@ namespace FastDFS.Client
             {
                 try { storageDisposable.Dispose(); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Error disposing storage client for '{Name}'", _name); }
+            }
+
+            if (_ownedResource != null)
+            {
+                try { _ownedResource.Dispose(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Error disposing owned resource for '{Name}'", _name); }
             }
         }
     }

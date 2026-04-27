@@ -1,9 +1,4 @@
 <Project>
-  <!--
-    鍏叡椤圭洰灞炴€ф枃浠?
-    鐢ㄤ簬 FastDFS.Client 鍜?FastDFS.Client.DependencyInjection 椤圭洰
-    鍖呯増鏈敱鏍圭洰褰曠殑 Directory.Packages.props 缁熶竴绠＄悊
-  -->
 
   <PropertyGroup Label="Common Properties">
     <TargetFramework>netstandard2.0</TargetFramework>
@@ -25,7 +20,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <PackageReleaseNotes>Initial release with core functionality:
 - FastDFS protocol implementation
 - Connection pooling with lifecycle management

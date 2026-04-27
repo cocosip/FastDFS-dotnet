@@ -1,6 +1,6 @@
 using System;
-using System.Text;
 using FastDFS.Client.Protocol.Responses;
+using FastDFS.Client.Utilities;
 
 namespace FastDFS.Client.Protocol.Requests
 {
@@ -48,8 +48,7 @@ namespace FastDFS.Client.Protocol.Requests
             int offset = 0;
 
             // GroupName (16 bytes, fixed length, padded with \0)
-            var groupNameBytes = System.Text.Encoding.UTF8.GetBytes(GroupName);
-            Array.Copy(groupNameBytes, 0, body, offset, Math.Min(groupNameBytes.Length, GroupNameLength));
+            ByteExtensions.CopyFixedString(GroupName, body, offset, GroupNameLength);
             offset += GroupNameLength;
 
             // FileName (variable length)

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
 using System.Threading.Tasks;
 using FastDFS.Client.Configuration;
 using FastDFS.Client.Connection;
@@ -253,6 +256,55 @@ namespace FastDFS.Client.Tests.Connection
             await Assert.ThrowsAsync<ArgumentNullException>(() => client.QueryFileInfoAsync(null!, "group1", "file"));
             await Assert.ThrowsAsync<ArgumentNullException>(() => client.SetMetadataAsync(null!, "group1", "file", metadata, MetadataFlag.Overwrite));
             await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetMetadataAsync(null!, "group1", "file"));
+        }
+
+        [Fact]
+        public async Task CleanupIdleConnections_WithExpiredMinimumConnection_ShouldDisposeConnection()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            try
+            {
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                Task<TcpClient> acceptedClientTask = listener.AcceptTcpClientAsync();
+
+                var config = new ConnectionPoolConfiguration
+                {
+                    MaxConnectionPerServer = 1,
+                    MinConnectionPerServer = 1,
+                    ConnectionIdleTimeout = 300,
+                    ConnectionLifetime = 1,
+                    ConnectionTimeout = 1000,
+                    SendTimeout = 1000,
+                    ReceiveTimeout = 1000
+                };
+
+                using var pool = new ConnectionPool("127.0.0.1", port, config);
+                var connection = await pool.GetConnectionAsync();
+                using TcpClient acceptedClient = await acceptedClientTask;
+                pool.ReturnConnection(connection);
+
+                await Task.Delay(TimeSpan.FromMilliseconds(1100));
+                InvokeCleanup(pool);
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+                connection.IsAlive.Should().BeFalse();
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static void InvokeCleanup(ConnectionPool pool)
+        {
+            var method = typeof(ConnectionPool).GetMethod(
+                "CleanupIdleConnections",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+            method.Should().NotBeNull();
+            method!.Invoke(pool, new object?[] { null });
         }
 
         // Note: Tests that require actual network connections are in integration tests

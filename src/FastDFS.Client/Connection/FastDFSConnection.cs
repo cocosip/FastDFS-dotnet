@@ -291,8 +291,8 @@ namespace FastDFS.Client.Connection
                 throw new ArgumentException("Content stream must be readable.", nameof(contentStream));
             if (contentLength < 0)
                 throw new ArgumentOutOfRangeException(nameof(contentLength), "Content length cannot be negative.");
-            if (string.IsNullOrEmpty(fileExtension))
-                throw new ArgumentException("File extension cannot be null or empty.", nameof(fileExtension));
+            if (fileExtension == null)
+                throw new ArgumentNullException(nameof(fileExtension));
             if (bufferSize <= 0)
                 throw new ArgumentOutOfRangeException(nameof(bufferSize), "Buffer size must be greater than 0.");
 

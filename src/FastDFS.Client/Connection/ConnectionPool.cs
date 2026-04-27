@@ -291,11 +291,7 @@ namespace FastDFS.Client.Connection
                 {
                     bool shouldKeep = false;
 
-                    if (validConnections.Count < minToKeep && connection.PollIsAlive())
-                    {
-                        shouldKeep = true;
-                    }
-                    else if (IsConnectionValid(connection, deepCheck: true))
+                    if (IsConnectionValid(connection, deepCheck: true))
                     {
                         shouldKeep = true;
                     }

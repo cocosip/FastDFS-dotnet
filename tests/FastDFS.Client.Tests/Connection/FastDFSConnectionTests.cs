@@ -1,10 +1,13 @@
 using FastDFS.Client.Connection;
 using FastDFS.Client.Exceptions;
 using FastDFS.Client.Protocol;
+using FastDFS.Client.Protocol.Responses;
 using FluentAssertions;
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -202,6 +205,75 @@ namespace FastDFS.Client.Tests.Connection
             {
                 listener.Stop();
             }
+        }
+
+        [Fact]
+        public async Task SendUploadRequestAsync_WithEmptyExtension_ShouldSendRequest()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+
+            try
+            {
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                Task serverTask = Task.Run(async () =>
+                {
+                    using TcpClient serverClient = await listener.AcceptTcpClientAsync();
+                    using NetworkStream stream = serverClient.GetStream();
+
+                    byte[] headerBuffer = new byte[FastDFSHeader.HeaderSize];
+                    await ReadExactlyAsync(stream, headerBuffer, headerBuffer.Length);
+                    var header = FastDFSHeader.Parse(headerBuffer);
+
+                    byte[] bodyBuffer = new byte[header.BodyLength];
+                    await ReadExactlyAsync(stream, bodyBuffer, bodyBuffer.Length);
+
+                    byte[] responseBody = CreateUploadResponseBody("group1", "M00/00/00/file");
+                    byte[] responseHeader = new FastDFSHeader(responseBody.Length, StorageCommand.UploadFile, 0).ToBytes();
+                    await stream.WriteAsync(responseHeader, 0, responseHeader.Length);
+                    await stream.WriteAsync(responseBody, 0, responseBody.Length);
+                });
+
+                using var connection = new FastDFSConnection("127.0.0.1", port, connectTimeout: 1000, sendTimeout: 1000, receiveTimeout: 1000);
+                await connection.ConnectAsync();
+
+                var response = await connection.SendUploadRequestAsync(
+                    StorageCommand.UploadFile,
+                    FastDFSConstants.StorePathIndexAuto,
+                    new MemoryStream(new byte[] { 1, 2, 3 }),
+                    3,
+                    string.Empty,
+                    1024);
+
+                response.FileId.Should().Be("group1/M00/00/00/file");
+                await serverTask;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, int count)
+        {
+            int totalRead = 0;
+            while (totalRead < count)
+            {
+                int read = await stream.ReadAsync(buffer, totalRead, count - totalRead);
+                if (read == 0)
+                    throw new EndOfStreamException();
+
+                totalRead += read;
+            }
+        }
+
+        private static byte[] CreateUploadResponseBody(string groupName, string fileName)
+        {
+            byte[] fileNameBytes = System.Text.Encoding.UTF8.GetBytes(fileName);
+            byte[] body = new byte[FastDFSConstants.GroupNameMaxLength + fileNameBytes.Length];
+            System.Text.Encoding.UTF8.GetBytes(groupName, 0, groupName.Length, body, 0);
+            Array.Copy(fileNameBytes, 0, body, FastDFSConstants.GroupNameMaxLength, fileNameBytes.Length);
+            return body;
         }
 
         private sealed class TestRequest : FastDFSRequest<TestResponse>

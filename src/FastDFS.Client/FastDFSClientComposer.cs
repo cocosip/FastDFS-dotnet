@@ -40,7 +40,8 @@ namespace FastDFS.Client
                 name,
                 configuration.DefaultGroupName,
                 configuration.StorageSelectionStrategy,
-                configuration.HttpConfig);
+                configuration.HttpConfig,
+                ownedResource: poolProvider);
         }
     }
 }
