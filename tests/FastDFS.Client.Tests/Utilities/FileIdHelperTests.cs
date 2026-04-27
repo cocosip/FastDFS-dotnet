@@ -50,6 +50,28 @@ namespace FastDFS.Client.Tests.Utilities
         }
 
         [Fact]
+        public void NormalizeFileId_WithStoragePathOnly_ShouldPrependDefaultGroup()
+        {
+            string fileId = FileIdHelper.NormalizeFileId("M00/00/00/file.txt", "group1");
+
+            fileId.Should().Be("group1/M00/00/00/file.txt");
+        }
+
+        [Fact]
+        public void CombineFileId_WithQualifiedFileId_ShouldReturnOriginalValue()
+        {
+            string fileId = FileIdHelper.CombineFileId("group1", "data-prod/M00/00/00/file.txt");
+
+            fileId.Should().Be("data-prod/M00/00/00/file.txt");
+        }
+
+        [Fact]
+        public void HasGroupName_WithStoragePathOnly_ShouldReturnFalse()
+        {
+            FileIdHelper.HasGroupName("M00/00/00/file.txt").Should().BeFalse();
+        }
+
+        [Fact]
         public void ParseFileId_WithStoragePathOnlyAndNoDefaultGroup_Throws()
         {
             Action act = () => FileIdHelper.ParseFileId("data0/00/00/file.txt", out _, out _);
