@@ -28,7 +28,15 @@ namespace FastDFS.Client
         /// <param name="metadata">Initial metadata key-value pairs.</param>
         public FastDFSMetadata(Dictionary<string, string> metadata)
         {
-            _metadata = metadata != null ? new Dictionary<string, string>(metadata) : new Dictionary<string, string>();
+            _metadata = new Dictionary<string, string>();
+
+            if (metadata == null)
+                return;
+
+            foreach (var item in metadata)
+            {
+                SetValue(item.Key, item.Value);
+            }
         }
 
         /// <summary>
@@ -39,7 +47,7 @@ namespace FastDFS.Client
         public string this[string key]
         {
             get => _metadata[key];
-            set => _metadata[key] = value;
+            set => SetValue(key, value);
         }
 
         /// <summary>
@@ -63,6 +71,11 @@ namespace FastDFS.Client
         /// <param name="key">The metadata key.</param>
         /// <param name="value">The metadata value.</param>
         public void Add(string key, string value)
+        {
+            SetValue(key, value);
+        }
+
+        private void SetValue(string key, string? value)
         {
             if (string.IsNullOrWhiteSpace(key))
                 throw new ArgumentException("Metadata key cannot be null or empty.", nameof(key));

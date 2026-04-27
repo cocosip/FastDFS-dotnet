@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FastDFS.Client.Exceptions;
 using FluentAssertions;
 using Xunit;
@@ -10,6 +11,28 @@ namespace FastDFS.Client.Tests
     /// </summary>
     public class FastDFSMetadataTests
     {
+        [Fact]
+        public void Constructor_WithRecordSeparatorInKey_ShouldThrowArgumentException()
+        {
+            Action act = () => new FastDFSMetadata(new Dictionary<string, string>
+            {
+                ["bad\x01key"] = "value"
+            });
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Constructor_WithFieldSeparatorInValue_ShouldThrowArgumentException()
+        {
+            Action act = () => new FastDFSMetadata(new Dictionary<string, string>
+            {
+                ["key"] = "bad\x02value"
+            });
+
+            act.Should().Throw<ArgumentException>();
+        }
+
         [Fact]
         public void Add_WithRecordSeparatorInKey_ShouldThrow()
         {
@@ -28,6 +51,36 @@ namespace FastDFS.Client.Tests
             Action act = () => metadata.Add("key", "bad\x02value");
 
             act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void IndexerSetter_WithRecordSeparatorInValue_ShouldThrowArgumentException()
+        {
+            var metadata = new FastDFSMetadata();
+
+            Action act = () => metadata["key"] = "bad\x01value";
+
+            act.Should().Throw<ArgumentException>();
+        }
+
+        [Fact]
+        public void Add_WithNullValue_ShouldStoreEmptyString()
+        {
+            var metadata = new FastDFSMetadata();
+
+            metadata.Add("key", null!);
+
+            metadata["key"].Should().Be(string.Empty);
+        }
+
+        [Fact]
+        public void IndexerSetter_WithNullValue_ShouldStoreEmptyString()
+        {
+            var metadata = new FastDFSMetadata();
+
+            metadata["key"] = null!;
+
+            metadata["key"].Should().Be(string.Empty);
         }
     }
 }
