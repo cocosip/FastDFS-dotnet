@@ -1,7 +1,7 @@
 <Project>
 
   <PropertyGroup Label="Common Properties">
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <TargetFrameworks>netstandard2.0;net8.0;net9.0;net10.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -20,14 +20,10 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <Version>1.2.0</Version>
-    <PackageReleaseNotes>Initial release with core functionality:
-- FastDFS protocol implementation
-- Connection pooling with lifecycle management
-- Tracker and Storage client
-- Multi-cluster support
-- Dependency injection integration
-- High-performance Socket-based networking
+    <Version>1.3.0</Version>
+    <PackageReleaseNotes>1.3.0
+- Multi-target support: netstandard2.0, net8.0, net9.0, net10.0
+- Per-TFM Microsoft.Extensions base packages: 10.x (netstandard2.0 / net10.0), 9.x (net9.0), 8.x (net8.0)
     </PackageReleaseNotes>
 
     <!-- Source Link support for debugging -->

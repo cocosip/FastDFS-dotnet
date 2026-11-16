@@ -102,6 +102,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write   # 允许 GitHub 颁发 OIDC 令牌，用于 NuGet 可信发布
 
     steps:
       - name: Checkout code
@@ -239,12 +240,18 @@ jobs:
 
           cat release_notes.md
 
+      - name: NuGet login (OIDC -> short-lived API key)
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}   # nuget.org 用户名（profile name），不是邮箱
+
       - name: Publish to NuGet
         run: |
           for package in ./artifacts/*.nupkg
           do
             echo "Publishing $package"
-            dotnet nuget push "$package" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+            dotnet nuget push "$package" --api-key ${{ steps.nuget_login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
 
       - name: Create GitHub Release
