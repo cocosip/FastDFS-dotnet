@@ -114,7 +114,9 @@ namespace FastDFS.Client
         /// <returns>True if the key was found; otherwise, false.</returns>
         public bool TryGetValue(string key, out string value)
         {
-            return _metadata.TryGetValue(key, out value);
+            // value 在返回 false 时为 null；netstandard2.0 的 TryGetValue 未带可空注解，
+            // net8+ 带 [MaybeNullWhen(false)]，故此处用 null-forgiving 消除跨 TFM 的 CS8601。
+            return _metadata.TryGetValue(key, out value!);
         }
 
         /// <summary>
