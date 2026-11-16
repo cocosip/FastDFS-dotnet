@@ -244,7 +244,7 @@ jobs:
         id: nuget_login
         uses: NuGet/login@v1
         with:
-          user: ${{ secrets.NUGET_USER }}   # nuget.org 用户名（profile name），不是邮箱
+          user: virtual   # nuget.org 账号用户名（公开信息，非机密）
 
       - name: Publish to NuGet
         run: |
